@@ -1,0 +1,12 @@
+[deps]
+DampedLinearSolve = "d0bc3897-303a-4c2a-8def-9d5e444f89b8"
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+Static = "aedffcd0-7271-4cad-89d0-dc628f76c6d3"
+
+[compat]
+Documenter = "1"
+
+[sources]
+DampedLinearSolve = {path = ".."}

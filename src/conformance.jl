@@ -29,7 +29,7 @@ end
 
 Write the right-hand side `b` into the linear system `ls`, after its Hessian storage has been
 filled with [`conformance_fill!`](@ref). The default sets `getb(ls) .= b`; a system whose `b` is
-derived from other storage (as `b = Jᵀr` for a [`DenseTallLinearSystem`](@ref)) needs a method
+derived from other storage (as `b = Jᵀr` for a tall system) needs a method
 that also fills that storage. Used by [`check_linear_system`](@ref).
 """
 conformance_fillb!(ls, b::AbstractVector) = (getb(ls) .= b; ls)
