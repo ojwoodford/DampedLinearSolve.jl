@@ -146,7 +146,7 @@ function quadform(A::SparseTallHessian, v::AbstractVector)
     total = 0.0
     @inbounds @simd for i in eachindex(Jv)
         total += Jv[i] * Jv[i]
-    end
+    end   # COV_EXCL_LINE: the end of an @simd loop; Julia 1.10 counts it, but never runs it
     return total
 end
 

@@ -351,7 +351,7 @@ function solve!(ls::SparseLinearSystem, ::StaticSymbol{:cholesky})
         end
     end
     if issuccess(cholfac)
-        @static if VERSION >= v"1.12.0-"
+        @static if VERSION >= v"1.12.0-"   # COV_EXCL_LINE: Julia 1.10 counts this line, but it runs at macro expansion
             ldiv!(ls.x, cholfac, ls.b)   # in place; this method first appears in Julia 1.12
         else
             ls.x .= cholfac \ ls.b

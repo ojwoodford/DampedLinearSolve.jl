@@ -2,7 +2,7 @@ function fast_dot(a::AbstractVector, b::AbstractVector)
     total = zero(promote_type(eltype(a), eltype(b)))
     @inbounds @fastmath @simd for i in eachindex(a, b)
         total += a[i] * b[i]
-    end
+    end   # COV_EXCL_LINE: the end of an @simd loop; Julia 1.10 counts it, but never runs it
     return total
 end
 
@@ -18,7 +18,7 @@ function quadform(A::Matrix, b::Vector)
         subtotal = zero(eltype(b))
         @fastmath @simd for j in eachindex(b)
             subtotal += A[j, i] * b[j]
-        end
+        end   # COV_EXCL_LINE: the end of an @simd loop; Julia 1.10 counts it, but never runs it
         total += b[i] * subtotal
     end
     return total
@@ -30,7 +30,7 @@ function quadform(A::StaticArray, b::StaticArray)
         subtotal = zero(eltype(b))
         @fastmath @simd for j in eachindex(b)
             subtotal += A[j, i] * b[j]
-        end
+        end   # COV_EXCL_LINE: the end of an @simd loop; Julia 1.10 counts it, but never runs it
         total += b[i] * subtotal
     end
     return total

@@ -225,4 +225,21 @@ end
         ls = makejacobiansystem(J, 2, :auto)
         @test_throws ArgumentError solve!(ls, static(:lsmr))
     end
+    # J as an operator for LSMR, and its adjoint
+    KExt = Base.get_extension(DampedLinearSolve, :KrylovExt)
+    J = [1.0 2.0; 3.0 4.0; 5.0 6.0]
+    op = KExt.TallOperator(J)
+    @test size(op) == (3, 2) && size(op, 1) == 3 && size(op, 2) == 2
+    opt = op'
+    @test opt isa KExt.TallOperatorT
+    @test size(opt) == (2, 3) && size(opt, 1) == 2 && size(opt, 2) == 3
+    @test eltype(op) == eltype(opt) == Float64
+    @test mul!(zeros(3), op, [1.0, -1.0]) ≈ J * [1.0, -1.0]
+    @test mul!(zeros(2), opt, [1.0, 0.0, 2.0]) ≈ J' * [1.0, 0.0, 2.0]
+    # Solving with Pardiso loaded but neither of its native libraries available is an error that
+    # says so (reached only on a machine without MKL or Panua Pardiso, so also called directly)
+    using Pardiso
+    PExt = Base.get_extension(DampedLinearSolve, :PardisoExt)
+    err = try PExt.pardiso_unavailable_error(); nothing catch e; e end
+    @test err isa ErrorException && occursin("neither Intel MKL Pardiso nor Panua Pardiso", err.msg)
 end

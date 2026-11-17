@@ -1,4 +1,4 @@
-@enum SolveStatus Success NotPositiveDefinite Indefinite
+@enum SolveStatus Success NotPositiveDefinite Indefinite   # COV_EXCL_LINE: some Julia versions count the macro's generated code here, but never run it
 
 # A solver is named by a Symbol or a StaticSymbol
 linsolver_symbol(s::Symbol) = s

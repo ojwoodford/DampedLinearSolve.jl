@@ -321,4 +321,95 @@ end
     err = try checklinsolver(static(:not_a_solver)); nothing catch e; e end
     @test err isa ArgumentError && occursin("Unknown linear solver", err.msg)
     @test checklinsolver(:auto) && checklinsolver(static(:qr))
+    # Each built-in solver name validates, and an unknown one does not (Symbols from a vector, so
+    # that each method runs rather than being folded at compile time)
+    for s in Symbol[:auto, :cholesky, :ldl, :qr]
+        @test validatelinsolver(s)
+    end
+    @test !validatelinsolver(Symbol[:not_a_solver][1])
+
+    # The Hessian prototype check: a matrix must be n×n, and anything else is not checked
+    @test checkhessian(zeros(3, 3), 3) === nothing
+    @test_throws DimensionMismatch checkhessian(zeros(3, 2), 3)
+    @test_throws DimensionMismatch checkhessian(zeros(2, 2), 3)
+    @test checkhessian(nothing, 3) === nothing
+
+    # A Cholesky factor with a nonpositive pivot is not positive definite
+    @test DLS.has_positive_pivots(cholesky([4.0 1.0; 1.0 3.0]))
+    @test !DLS.has_positive_pivots(Cholesky(UpperTriangular([1.0 0.0; 0.0 -1.0]), 'U', 0))
+    @test !DLS.has_positive_pivots(Cholesky(UpperTriangular([1.0 0.0; 0.0 NaN]), 'U', 0))
+
+    # try_cholesky! on static arrays
+    x_s = zeros(MVector{2})
+    A_s = SMatrix{2, 2}(4.0, 1.0, 1.0, 3.0)
+    b_s = SVector(1.0, 2.0)
+    @test DLS.try_cholesky!(x_s, A_s, b_s) == Success
+    @test x_s ≈ Matrix(A_s) \ Vector(b_s)
+    @test DLS.try_cholesky!(x_s, SMatrix{2, 2}(-1.0, 0.0, 0.0, 1.0), b_s) == NotPositiveDefinite
+
+    # solve! without a solver uses :auto
+    ls = DLS.DenseLinearSystem{Float64}([4.0 1.0; 1.0 3.0], [1.0, 2.0], zeros(2))
+    @test solve!(ls) == Success
+    @test getx(ls) ≈ [4.0 1.0; 1.0 3.0] \ [1.0, 2.0]
+
+    # The convenience constructors of the static and dense systems
+    ls_s = DLS.StaticLinearSystem{3}()
+    @test ls_s isa DLS.StaticLinearSystem{3, 9, Float64}
+    @test ls_s.lambda == 0 && ls_s.scaling === nothing
+    for ls_d in (DLS.DenseLinearSystem{Float64}(3), DLS.DenseLinearSystem(3))
+        @test ls_d isa DLS.DenseLinearSystem{Float64, Nothing}
+        @test size(getA(ls_d)) == (3, 3) && length(getb(ls_d)) == 3 && length(getx(ls_d)) == 3
+        @test ls_d.lambda == 0 && ls_d.scaling === nothing
+    end
+    ws = DLS.DenseLDLWorkspace(3)
+    @test DLS.DenseLinearSystem(3; solver_ws = ws).solver_ws === ws
+    A_d, b_d, x_d = [2.0 0.0; 0.0 2.0], [1.0, 1.0], zeros(2)
+    ls_d = DLS.DenseLinearSystem(A_d, b_d, x_d)
+    @test getA(ls_d) === A_d && getb(ls_d) === b_d && getx(ls_d) === x_d
+    @test solve!(ls_d, :auto) == Success && x_d ≈ [0.5, 0.5]
+
+    # A sparse solver with no workspace of its own (and one named by a Symbol) gets none
+    A_sp = sparse([4.0 1.0; 1.0 3.0])
+    @test DLS.makesparsews(A_sp, static(:not_a_solver)) === nothing
+    @test DLS.makesparsews(A_sp, :qr) === nothing
+    @test DLS.makesparsews(A_sp, :auto) isa DLS.LDLFactorizations.LDLFactorization
+
+    # makehessiansystem from an immutable static matrix, a non-Matrix dense matrix, and a size
+    ls_s = makehessiansystem(SMatrix{2, 2}(4.0, 1.0, 1.0, 3.0), :auto)
+    @test ls_s isa DLS.StaticLinearSystem{2, 4, Float64}
+    for H in (Symmetric([4.0 1.0; 1.0 3.0]), [4 1; 1 3])
+        ls_h = makehessiansystem(H, :ldl)
+        @test ls_h isa DLS.DenseLinearSystem{Float64, DLS.DenseLDLWorkspace}
+        @test getA(ls_h) == [4.0 1.0; 1.0 3.0] && getA(ls_h) !== H
+        getb(ls_h) .= [1.0, 2.0]
+        @test solve!(ls_h, :ldl) == Success
+        @test getx(ls_h) ≈ [4.0 1.0; 1.0 3.0] \ [1.0, 2.0]
+    end
+    for (n, s, W) in ((4, :auto, Nothing), (Int32(4), :ldl, DLS.DenseLDLWorkspace))
+        ls_n = makehessiansystem(n, s)
+        @test ls_n isa DLS.DenseLinearSystem{Float64, W}
+        @test size(getA(ls_n)) == (4, 4)
+    end
+
+    # Damping applied through the system, for the static and dense systems
+    for ls_k in (makehessiansystem(MMatrix{2, 2}(4.0, 1.0, 1.0, 3.0), :auto), makehessiansystem([4.0 1.0; 1.0 3.0], :auto))
+        DLS.uniformscaling!(ls_k, 2.0)
+        @test getA(ls_k) == [6.0 1.0; 1.0 5.0]
+        DLS.damp_marquardt!(ls_k, [1.0, 2.0], 0.5)
+        @test getA(ls_k) == [6.5 1.0; 1.0 6.0]
+    end
+
+    # The structure key of a Hessian prototype is its type and size
+    @test structurekey(zeros(3, 3)) == (Matrix{Float64}, (3, 3))
+    @test structurekey(zeros(3, 3)) == structurekey(ones(3, 3))
+    @test structurekey(zeros(3, 3)) != structurekey(zeros(2, 2))
+    @test structurekey(spzeros(3, 3)) != structurekey(zeros(3, 3))
+
+    # The diagonal of A, of the static, dense and sparse systems
+    H = [4.0 1.0 0.0; 1.0 3.0 1.0; 0.0 1.0 2.0]
+    for ls_g in (makehessiansystem(MMatrix{3, 3}(H), :auto), makehessiansystem(copy(H), :auto), makehessiansystem(sparse(H), :auto))
+        d = zeros(3)
+        @test getdiag!(d, ls_g) === d
+        @test d == [4.0, 3.0, 2.0]
+    end
 end

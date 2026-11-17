@@ -111,3 +111,18 @@ end
     end
 
 end
+
+# Paths the solve-level tests moved from SecondOrderOptimization did not reach on their own (rules.md 28)
+@testset "sparsetallsystem.jl: the remaining branches" begin
+    J = sparse([1.0 0.0; 3.0 4.0; 0.0 6.0])
+    ls = DLS.SparseTallLinearSystem(copy(J))
+    A = getA(ls)
+    @test size(A) == (2, 2) && size(A, 1) == 2 && size(A, 2) == 2
+    # isfinitesystem looks at both J's stored values and r
+    @test isfinitesystem(ls)
+    getr(A)[2] = NaN
+    @test !isfinitesystem(ls)
+    getr(A)[2] = 0.0
+    nonzeros(getJ(A))[1] = Inf
+    @test !isfinitesystem(ls)
+end

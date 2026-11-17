@@ -262,4 +262,48 @@ end
     # J v for a J with no columns is the zero vector, written without reading v
     y = fill(NaN, 3)
     @test DLS.jmul!(y, zeros(3, 0), Float64[]) == zeros(3)
+
+    # The convenience constructors of the workspace and the Hessian storage
+    ws = DLS.TallQRWorkspace(5, 2)
+    @test ws isa DLS.TallQRWorkspace && length(ws.colnorm2) == 2 && ws.stale && ws.normsstale
+    J = [1.0 2.0; 3.0 4.0; 5.0 6.0]
+    A = DLS.TallHessian(J)
+    @test getJ(A) === J && getr(A) == zeros(3)
+    @test size(A) == (2, 2) && size(A, 1) == 2 && size(A, 2) == 2
+
+    # isfinitesystem looks at both J and r
+    ls = makejacobiansystem(copy(J), 2, :auto)
+    @test isfinitesystem(ls)
+    getr(getA(ls))[2] = NaN
+    @test !isfinitesystem(ls)
+    getr(getA(ls))[2] = 0.0
+    getJ(getA(ls))[1, 2] = Inf
+    @test !isfinitesystem(ls)
+
+    # The diagonal of JᵀJ is the squared column norms of J
+    ls = makejacobiansystem(copy(J), 2, :auto)
+    d = zeros(2)
+    @test getdiag!(d, ls) === d
+    @test d ≈ diag(J' * J)
+
+    # The Jacobian prototype checks, one per kind of prototype
+    @test checkjacobian(3) === nothing
+    @test checkjacobian(J) === nothing
+    @test checkjacobian(DLS.SparseArrays.sparse(J)) === nothing
+    for (bad, text) in ((0, "at least 1"), (zeros(0, 2), "has no rows"), (DLS.SparseArrays.spzeros(0, 2), "has no rows"),
+                        (DLS.SparseArrays.sparse(Int32[1], Int32[1], [1.0]), "sparse Jacobian prototype of type"),
+                        (zeros(Float32, 3, 2), "must be Float64"), (true, "type Bool is not supported"),
+                        ("J", "type String is not supported"))
+        err = try checkjacobian(bad); nothing catch e; e end
+        @test err isa ArgumentError && occursin(text, err.msg)
+    end
+
+    # The prototype's size, and the solvers a tall system accepts
+    @test jacobian_nrows(4) == 4 && jacobian_nrows(Int32(4)) === 4 && jacobian_nrows(J) == 3
+    @test jacobian_ncols(J) == 2 && jacobian_ncols(4) === nothing
+    for s in (:auto, :qr, :lsmr)
+        @test check_jacobian_linsolver(J, s) === nothing
+    end
+    err = try check_jacobian_linsolver(J, :cholesky); nothing catch e; e end
+    @test err isa ArgumentError && occursin("linsolver = :cholesky is not supported", err.msg)
 end

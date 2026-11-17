@@ -116,12 +116,12 @@ function jmul!(y::AbstractVector, J::Matrix{Float64}, v::AbstractVector)
         v1 = v[1]
         @fastmath @simd for i in 1:m
             y[i] = J[i, 1] * v1
-        end
+        end   # COV_EXCL_LINE: the end of an @simd loop; Julia 1.10 counts it, but never runs it
         for j in 2:n
             vj = v[j]
             @fastmath @simd for i in 1:m
                 y[i] += J[i, j] * vj
-            end
+            end   # COV_EXCL_LINE: the end of an @simd loop; Julia 1.10 counts it, but never runs it
         end
     end
     return y
@@ -134,7 +134,7 @@ function quadform(A::TallHessian, v::AbstractVector)
     total = 0.0
     @inbounds @simd for i in eachindex(Jv)
         total += Jv[i] * Jv[i]
-    end
+    end   # COV_EXCL_LINE: the end of an @simd loop; Julia 1.10 counts it, but never runs it
     return total
 end
 
@@ -145,7 +145,7 @@ function jtr!(g::AbstractVector, J::Matrix{Float64}, r::Vector{Float64})
         total = 0.0
         @fastmath @simd for i in 1:m
             total += J[i, j] * r[i]
-        end
+        end   # COV_EXCL_LINE: the end of an @simd loop; Julia 1.10 counts it, but never runs it
         g[j] = total
     end
     return g
