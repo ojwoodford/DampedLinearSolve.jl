@@ -116,12 +116,12 @@ function jmul!(y::AbstractVector, J::Matrix{Float64}, v::AbstractVector)
         v1 = v[1]
         @fastmath @simd for i in 1:m
             y[i] = J[i, 1] * v1
-        end
+        end   # COV_EXCL_LINE: the end of an @simd loop; Julia 1.10 counts it, but never runs it
         for j in 2:n
             vj = v[j]
             @fastmath @simd for i in 1:m
                 y[i] += J[i, j] * vj
-            end
+            end   # COV_EXCL_LINE: the end of an @simd loop; Julia 1.10 counts it, but never runs it
         end
     end
     return y
@@ -134,7 +134,7 @@ function quadform(A::TallHessian, v::AbstractVector)
     total = 0.0
     @inbounds @simd for i in eachindex(Jv)
         total += Jv[i] * Jv[i]
-    end
+    end   # COV_EXCL_LINE: the end of an @simd loop; Julia 1.10 counts it, but never runs it
     return total
 end
 
@@ -145,7 +145,7 @@ function jtr!(g::AbstractVector, J::Matrix{Float64}, r::Vector{Float64})
         total = 0.0
         @fastmath @simd for i in 1:m
             total += J[i, j] * r[i]
-        end
+        end   # COV_EXCL_LINE: the end of an @simd loop; Julia 1.10 counts it, but never runs it
         g[j] = total
     end
     return g
@@ -211,7 +211,7 @@ column norms (and zeroes `b`, which the linearization then overwrites). Code tha
 `markstale!(getA(ls))`.
 
 `DenseTallLinearSystem(J)` uses `J` as its storage with the values it holds, as does
-`maketallsystem` with a `Matrix` prototype; with an integer `m`, `J` starts as zeros.
+`makejacobiansystem` with a `Matrix` prototype; with an integer `m`, `J` starts as zeros.
 `copy_structure` copies `J`, so a trial system starts with the same entries.
 """
 mutable struct DenseTallLinearSystem{W} <: AbstractTallLinearSystem
@@ -254,11 +254,11 @@ const LSMR_CONLIM = 1 / sqrt(eps(Float64))
 # A small problem with a static number of variables (`n` a `StaticInt`) gets the static system
 # (statictallsystem.jl). The choice depends on m, known only at run time, so it is made here, once,
 # when the system is built.
-function maketallsystem(m::Integer, n, linsolver)
+function makejacobiansystem(m::Integer, n, linsolver)
     usesstatictall(m, n, linsolver) && return StaticTallLinearSystem(zeros(MMatrix{Int(m), dynamic(n), Float64}))
     return DenseTallLinearSystem(m, dynamic(n); linsolver)
 end
-function maketallsystem(J::Matrix{Float64}, n, linsolver)
+function makejacobiansystem(J::Matrix{Float64}, n, linsolver)
     usesstatictall(size(J, 1), n, linsolver) && return StaticTallLinearSystem(J)
     return DenseTallLinearSystem(J; linsolver)
 end

@@ -3,7 +3,7 @@
 
 Supertype of the linear systems: a symmetric matrix `A`, a vector `b` and a solution `x` of
 dimension `n`, and a damping to apply when solving. The built-in systems are built by
-[`makelinearsystem`](@ref) (static, dense and sparse `A`) and [`maketallsystem`](@ref) (`A = JᵀJ`
+[`makehessiansystem`](@ref) (static, dense and sparse `A`) and [`makejacobiansystem`](@ref) (`A = JᵀJ`
 held as a Jacobian `J` and a residual `r`, dense, sparse or static). A new system type implements
 the functions of the contract below, as methods of `DampedLinearSolve`'s functions, and should
 pass [`check_linear_system`](@ref). The documentation's "The linear-system contract" page states
@@ -57,12 +57,12 @@ encountered, by a solve that completed.
 Indefinite
 
 """
-    makelinearsystem(H, linsolver) -> AbstractLinearSystem
-    makelinearsystem(n, linsolver) -> AbstractLinearSystem
+    makehessiansystem(H, linsolver) -> AbstractLinearSystem
+    makehessiansystem(n, linsolver) -> AbstractLinearSystem
 
-A linear system whose `A` is stored as the prototype `H` describes, or, without a prototype, a
-system of `n` variables: static (`StaticArrays`, stack allocated) when `n` is a `Static.StaticInt`,
-dense when it is an `Int`.
+A linear system built from a Hessian prototype `H`, whose `A` is stored as `H` describes, or,
+without a prototype, a system of `n` variables: static (`StaticArrays`, stack allocated) when `n`
+is a `Static.StaticInt`, dense when it is an `Int`.
 
 - `H::MMatrix`: a static system that writes into `H`; any other `StaticMatrix`: a static system of
   its own.
@@ -77,17 +77,17 @@ solved with it. Validate `H` first with [`checkhessian`](@ref).
 
 # Example
 ```julia
-ls = makelinearsystem(zeros(3, 3), :ldl)      # dense, Bunch–Kaufman workspace preallocated
-ls = makelinearsystem(static(2), :auto)        # static 2 × 2
+ls = makehessiansystem(zeros(3, 3), :ldl)      # dense, Bunch–Kaufman workspace preallocated
+ls = makehessiansystem(static(2), :auto)        # static 2 × 2
 ```
 """
-makelinearsystem
+makehessiansystem
 
 """
-    maketallsystem(J, n, linsolver) -> AbstractLinearSystem
+    makejacobiansystem(J, n, linsolver) -> AbstractLinearSystem
 
-A tall linear system for `n` variables: `A = JᵀJ` held as the Jacobian `J` and the residual `r`
-([`getJ`](@ref), [`getr`](@ref)), `b = Jᵀr`, and each solve the solution of
+A tall linear system built from a Jacobian prototype `J`, for `n` variables: `A = JᵀJ` held as `J`
+and the residual `r` ([`getJ`](@ref), [`getr`](@ref)), `b = Jᵀr`, and each solve the solution of
 `min ‖J x − r‖² + λ xᵀD x` from `J`, without forming `JᵀJ`.
 
 - `J::Matrix{Float64}`: a dense system that writes into `J` (with the values it holds); static
@@ -102,10 +102,10 @@ with [`checkjacobian`](@ref) and [`check_jacobian_linsolver`](@ref).
 
 # Example
 ```julia
-ls = maketallsystem(20, 3, :auto)     # 20 residuals, 3 variables, dense
+ls = makejacobiansystem(20, 3, :auto)     # 20 residuals, 3 variables, dense
 ```
 """
-maketallsystem
+makejacobiansystem
 
 """
     structurekey(P)
@@ -147,7 +147,7 @@ check_jacobian_linsolver
     jacobian_ncols(J) -> Union{Int, Nothing}
 
 The number of columns of the Jacobian prototype `J` (the number of variables of its system), or
-`nothing` for an integer `m`, whose system is sized by the `n` passed to [`maketallsystem`](@ref).
+`nothing` for an integer `m`, whose system is sized by the `n` passed to [`makejacobiansystem`](@ref).
 """
 jacobian_ncols
 
@@ -210,7 +210,7 @@ not zeroed; their factorization and column norms are invalidated.
 
 # Example
 ```julia
-ls = makelinearsystem(3, :auto)
+ls = makehessiansystem(3, :auto)
 zero!(ls)
 ```
 """
@@ -280,7 +280,7 @@ falling back to LU when the matrix is not positive definite (the solve is then r
 
 # Example
 ```julia
-ls = makelinearsystem([2.0 0.0; 0.0 4.0], :auto)
+ls = makehessiansystem([2.0 0.0; 0.0 4.0], :auto)
 getb(ls) .= [4.0, 8.0]
 solve!(ls, :cholesky)   # Success; getx(ls) == [2.0, 2.0]
 ```

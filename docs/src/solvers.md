@@ -1,7 +1,7 @@
 # Solvers
 
 A solver is named by a `Symbol` or a `Static.StaticSymbol` when the system is built
-([`makelinearsystem`](@ref), [`maketallsystem`](@ref)), which preallocates its workspace, and again
+([`makehessiansystem`](@ref), [`makejacobiansystem`](@ref)), which preallocates its workspace, and again
 when it is solved ([`solve!`](@ref)); the two must agree. [`validatelinsolver`](@ref) says whether a
 name is available, and [`checklinsolver`](@ref) throws, naming the package to load, when it is not.
 

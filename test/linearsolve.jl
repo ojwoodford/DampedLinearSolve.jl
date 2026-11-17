@@ -27,7 +27,7 @@ using DampedLinearSolve: quadratic_model_change
     # SparseLinearSystem
     A_sp = sparse(A_spd)
     for solver in (:auto, :cholesky, :ldl, :qr)
-        ls = DampedLinearSolve.makelinearsystem(copy(A_sp), static(solver))
+        ls = DampedLinearSolve.makehessiansystem(copy(A_sp), static(solver))
         ls.b .= b_vec
         status = DampedLinearSolve.solve!(ls, static(solver))
         @test status == DampedLinearSolve.Success
@@ -66,20 +66,20 @@ using DampedLinearSolve: quadratic_model_change
 
     # LDL on Sparse (returns Indefinite, still solves)
     A_sp_indef = sparse(A_indef)
-    ls_sp = DampedLinearSolve.makelinearsystem(copy(A_sp_indef), static(:ldl))
+    ls_sp = DampedLinearSolve.makehessiansystem(copy(A_sp_indef), static(:ldl))
     ls_sp.b .= b_indef
     status_sp_ldl = DampedLinearSolve.solve!(ls_sp, static(:ldl))
     @test status_sp_ldl == DampedLinearSolve.Indefinite
     @test isapprox(ls_sp.x, x_true; rtol=1e-8)
 
     # Cholesky on Sparse with indefinite system fails cleanly without fallback
-    ls_sp_chol = DampedLinearSolve.makelinearsystem(copy(A_sp_indef), static(:cholesky))
+    ls_sp_chol = DampedLinearSolve.makehessiansystem(copy(A_sp_indef), static(:cholesky))
     ls_sp_chol.b .= b_indef
     status_sp_chol = DampedLinearSolve.solve!(ls_sp_chol, static(:cholesky))
     @test status_sp_chol == DampedLinearSolve.NotPositiveDefinite
 
     # QR on Sparse
-    ls_sp_qr = DampedLinearSolve.makelinearsystem(copy(A_sp_indef), static(:qr))
+    ls_sp_qr = DampedLinearSolve.makehessiansystem(copy(A_sp_indef), static(:qr))
     ls_sp_qr.b .= b_indef
     status_sp_qr = DampedLinearSolve.solve!(ls_sp_qr, static(:qr))
     @test status_sp_qr == DampedLinearSolve.Success
@@ -102,7 +102,7 @@ using DampedLinearSolve: quadratic_model_change
     @test DampedLinearSolve.try_cholesky!(x_out, copy(A_indef), b_indef) == DampedLinearSolve.NotPositiveDefinite
 
     @test DampedLinearSolve.max_diag(A_spd) ≈ maximum(diag(A_spd))
-    ls_sp_test = DampedLinearSolve.makelinearsystem(copy(A_sp), static(:ldl))
+    ls_sp_test = DampedLinearSolve.makehessiansystem(copy(A_sp), static(:ldl))
     @test DampedLinearSolve.max_diag(ls_sp_test) ≈ maximum(diag(A_spd))
 
     A_damp = copy(A_spd)
@@ -127,7 +127,7 @@ using DampedLinearSolve: quadratic_model_change
     @test isapprox(ls_s.x, x_damped_true; rtol=1e-8)
     @test Matrix(ls_s.A) == A_spd # base matrix never mutated!
 
-    ls_sparse = DampedLinearSolve.makelinearsystem(copy(A_sp), static(:ldl))
+    ls_sparse = DampedLinearSolve.makehessiansystem(copy(A_sp), static(:ldl))
     ls_sparse.b .= b_vec
     DampedLinearSolve.dampen!(ls_sparse, 3.0)
     DampedLinearSolve.solve!(ls_sparse, static(:ldl))
@@ -135,7 +135,7 @@ using DampedLinearSolve: quadratic_model_change
     @test ls_sparse.A.nzval[ls_sparse.diag_inds] == diag(A_spd)
 
     # Sparse CHOLMOD native shift test
-    ls_chol_sp = DampedLinearSolve.makelinearsystem(copy(A_sp), static(:cholesky))
+    ls_chol_sp = DampedLinearSolve.makehessiansystem(copy(A_sp), static(:cholesky))
     ls_chol_sp.b .= b_vec
     DampedLinearSolve.dampen!(ls_chol_sp, 3.0)
     DampedLinearSolve.solve!(ls_chol_sp, static(:cholesky))
@@ -151,7 +151,7 @@ using DampedLinearSolve: quadratic_model_change
         @test eltype(dinds) == Ti
         @test all(A_fixed.rowval[dinds[c]] == c for c in 1:3)
         @test A_fixed == H_missing
-        ls = DampedLinearSolve.makelinearsystem(H_missing, static(:auto))
+        ls = DampedLinearSolve.makehessiansystem(H_missing, static(:auto))
         @test ls isa DampedLinearSolve.SparseLinearSystem{Float64, Ti}
         ls.A[3, 3] = 6.0
         ls.b .= [1.0, 2.0, 3.0]
@@ -178,7 +178,7 @@ using DampedLinearSolve: quadratic_model_change
         b_sc = A_sc * x_true
         ls_d = DampedLinearSolve.DenseLinearSystem{Float64}(copy(A_sc), copy(b_sc), zeros(5))
         @test DampedLinearSolve.solve!(ls_d, static(:ldl)) == DampedLinearSolve.Indefinite
-        ls_s = DampedLinearSolve.makelinearsystem(sparse(A_sc), static(:ldl))
+        ls_s = DampedLinearSolve.makehessiansystem(sparse(A_sc), static(:ldl))
         ls_s.b .= b_sc
         @test DampedLinearSolve.solve!(ls_s, static(:ldl)) == DampedLinearSolve.Indefinite
         ls_st = DampedLinearSolve.StaticLinearSystem{5, 25, Float64}(MMatrix{5, 5}(A_sc), MVector{5}(b_sc), zeros(MVector{5, Float64}))
@@ -206,7 +206,7 @@ using DampedLinearSolve: quadratic_model_change
         n_t = size(A_t, 1)
         x_t = randn(n_t)
         b_t = A_t * x_t
-        ls_ws = DampedLinearSolve.makelinearsystem(copy(A_t), static(:ldl))
+        ls_ws = DampedLinearSolve.makehessiansystem(copy(A_t), static(:ldl))
         @test ls_ws.solver_ws isa DampedLinearSolve.DenseLDLWorkspace
         ls_ws.b .= b_t
         ls_ref = DampedLinearSolve.DenseLinearSystem{Float64}(copy(A_t), copy(b_t), zeros(n_t))
@@ -222,7 +222,7 @@ using DampedLinearSolve: quadratic_model_change
         @test DampedLinearSolve.copy_structure(ls_ws).solver_ws === ls_ws.solver_ws
     end
     # An exactly singular matrix fails
-    ls_sing = DampedLinearSolve.makelinearsystem([1.0 1.0; 1.0 1.0], static(:ldl))
+    ls_sing = DampedLinearSolve.makehessiansystem([1.0 1.0; 1.0 1.0], static(:ldl))
     ls_sing.b .= [1.0, 0.0]
     @test DampedLinearSolve.solve!(ls_sing, static(:ldl)) == DampedLinearSolve.NotPositiveDefinite
     # The packed-factor check gives the inertia's answer, for both triangles
@@ -236,7 +236,7 @@ using DampedLinearSolve: quadratic_model_change
     end
 
     # M9: sparse :cholesky solves in place on Julia 1.12 and later
-    ls_spc = DampedLinearSolve.makelinearsystem(sparse(A_spd), static(:cholesky))
+    ls_spc = DampedLinearSolve.makehessiansystem(sparse(A_spd), static(:cholesky))
     ls_spc.b .= b_vec
     x_before = ls_spc.x
     @test DampedLinearSolve.solve!(ls_spc, static(:cholesky)) == DampedLinearSolve.Success
@@ -262,11 +262,11 @@ end
 function as4_system(storage, A, s)
     b = [1.0, 2, 3, 4]
     if storage === :static
-        ls = DampedLinearSolve.makelinearsystem(static(4), s)
+        ls = DampedLinearSolve.makehessiansystem(static(4), s)
     elseif storage === :dense
-        ls = DampedLinearSolve.makelinearsystem(zeros(4, 4), s)
+        ls = DampedLinearSolve.makehessiansystem(zeros(4, 4), s)
     else
-        ls = DampedLinearSolve.makelinearsystem(sparse(ones(4, 4)), s)
+        ls = DampedLinearSolve.makehessiansystem(sparse(ones(4, 4)), s)
     end
     if storage === :sparse
         ls.A.nzval .= vec(A)
@@ -321,4 +321,95 @@ end
     err = try checklinsolver(static(:not_a_solver)); nothing catch e; e end
     @test err isa ArgumentError && occursin("Unknown linear solver", err.msg)
     @test checklinsolver(:auto) && checklinsolver(static(:qr))
+    # Each built-in solver name validates, and an unknown one does not (Symbols from a vector, so
+    # that each method runs rather than being folded at compile time)
+    for s in Symbol[:auto, :cholesky, :ldl, :qr]
+        @test validatelinsolver(s)
+    end
+    @test !validatelinsolver(Symbol[:not_a_solver][1])
+
+    # The Hessian prototype check: a matrix must be n×n, and anything else is not checked
+    @test checkhessian(zeros(3, 3), 3) === nothing
+    @test_throws DimensionMismatch checkhessian(zeros(3, 2), 3)
+    @test_throws DimensionMismatch checkhessian(zeros(2, 2), 3)
+    @test checkhessian(nothing, 3) === nothing
+
+    # A Cholesky factor with a nonpositive pivot is not positive definite
+    @test DLS.has_positive_pivots(cholesky([4.0 1.0; 1.0 3.0]))
+    @test !DLS.has_positive_pivots(Cholesky(UpperTriangular([1.0 0.0; 0.0 -1.0]), 'U', 0))
+    @test !DLS.has_positive_pivots(Cholesky(UpperTriangular([1.0 0.0; 0.0 NaN]), 'U', 0))
+
+    # try_cholesky! on static arrays
+    x_s = zeros(MVector{2})
+    A_s = SMatrix{2, 2}(4.0, 1.0, 1.0, 3.0)
+    b_s = SVector(1.0, 2.0)
+    @test DLS.try_cholesky!(x_s, A_s, b_s) == Success
+    @test x_s ≈ Matrix(A_s) \ Vector(b_s)
+    @test DLS.try_cholesky!(x_s, SMatrix{2, 2}(-1.0, 0.0, 0.0, 1.0), b_s) == NotPositiveDefinite
+
+    # solve! without a solver uses :auto
+    ls = DLS.DenseLinearSystem{Float64}([4.0 1.0; 1.0 3.0], [1.0, 2.0], zeros(2))
+    @test solve!(ls) == Success
+    @test getx(ls) ≈ [4.0 1.0; 1.0 3.0] \ [1.0, 2.0]
+
+    # The convenience constructors of the static and dense systems
+    ls_s = DLS.StaticLinearSystem{3}()
+    @test ls_s isa DLS.StaticLinearSystem{3, 9, Float64}
+    @test ls_s.lambda == 0 && ls_s.scaling === nothing
+    for ls_d in (DLS.DenseLinearSystem{Float64}(3), DLS.DenseLinearSystem(3))
+        @test ls_d isa DLS.DenseLinearSystem{Float64, Nothing}
+        @test size(getA(ls_d)) == (3, 3) && length(getb(ls_d)) == 3 && length(getx(ls_d)) == 3
+        @test ls_d.lambda == 0 && ls_d.scaling === nothing
+    end
+    ws = DLS.DenseLDLWorkspace(3)
+    @test DLS.DenseLinearSystem(3; solver_ws = ws).solver_ws === ws
+    A_d, b_d, x_d = [2.0 0.0; 0.0 2.0], [1.0, 1.0], zeros(2)
+    ls_d = DLS.DenseLinearSystem(A_d, b_d, x_d)
+    @test getA(ls_d) === A_d && getb(ls_d) === b_d && getx(ls_d) === x_d
+    @test solve!(ls_d, :auto) == Success && x_d ≈ [0.5, 0.5]
+
+    # A sparse solver with no workspace of its own (and one named by a Symbol) gets none
+    A_sp = sparse([4.0 1.0; 1.0 3.0])
+    @test DLS.makesparsews(A_sp, static(:not_a_solver)) === nothing
+    @test DLS.makesparsews(A_sp, :qr) === nothing
+    @test DLS.makesparsews(A_sp, :auto) isa DLS.LDLFactorizations.LDLFactorization
+
+    # makehessiansystem from an immutable static matrix, a non-Matrix dense matrix, and a size
+    ls_s = makehessiansystem(SMatrix{2, 2}(4.0, 1.0, 1.0, 3.0), :auto)
+    @test ls_s isa DLS.StaticLinearSystem{2, 4, Float64}
+    for H in (Symmetric([4.0 1.0; 1.0 3.0]), [4 1; 1 3])
+        ls_h = makehessiansystem(H, :ldl)
+        @test ls_h isa DLS.DenseLinearSystem{Float64, DLS.DenseLDLWorkspace}
+        @test getA(ls_h) == [4.0 1.0; 1.0 3.0] && getA(ls_h) !== H
+        getb(ls_h) .= [1.0, 2.0]
+        @test solve!(ls_h, :ldl) == Success
+        @test getx(ls_h) ≈ [4.0 1.0; 1.0 3.0] \ [1.0, 2.0]
+    end
+    for (n, s, W) in ((4, :auto, Nothing), (Int32(4), :ldl, DLS.DenseLDLWorkspace))
+        ls_n = makehessiansystem(n, s)
+        @test ls_n isa DLS.DenseLinearSystem{Float64, W}
+        @test size(getA(ls_n)) == (4, 4)
+    end
+
+    # Damping applied through the system, for the static and dense systems
+    for ls_k in (makehessiansystem(MMatrix{2, 2}(4.0, 1.0, 1.0, 3.0), :auto), makehessiansystem([4.0 1.0; 1.0 3.0], :auto))
+        DLS.uniformscaling!(ls_k, 2.0)
+        @test getA(ls_k) == [6.0 1.0; 1.0 5.0]
+        DLS.damp_marquardt!(ls_k, [1.0, 2.0], 0.5)
+        @test getA(ls_k) == [6.5 1.0; 1.0 6.0]
+    end
+
+    # The structure key of a Hessian prototype is its type and size
+    @test structurekey(zeros(3, 3)) == (Matrix{Float64}, (3, 3))
+    @test structurekey(zeros(3, 3)) == structurekey(ones(3, 3))
+    @test structurekey(zeros(3, 3)) != structurekey(zeros(2, 2))
+    @test structurekey(spzeros(3, 3)) != structurekey(zeros(3, 3))
+
+    # The diagonal of A, of the static, dense and sparse systems
+    H = [4.0 1.0 0.0; 1.0 3.0 1.0; 0.0 1.0 2.0]
+    for ls_g in (makehessiansystem(MMatrix{3, 3}(H), :auto), makehessiansystem(copy(H), :auto), makehessiansystem(sparse(H), :auto))
+        d = zeros(3)
+        @test getdiag!(d, ls_g) === d
+        @test d == [4.0, 3.0, 2.0]
+    end
 end

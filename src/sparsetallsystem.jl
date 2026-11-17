@@ -146,7 +146,7 @@ function quadform(A::SparseTallHessian, v::AbstractVector)
     total = 0.0
     @inbounds @simd for i in eachindex(Jv)
         total += Jv[i] * Jv[i]
-    end
+    end   # COV_EXCL_LINE: the end of an @simd loop; Julia 1.10 counts it, but never runs it
     return total
 end
 
@@ -226,7 +226,7 @@ function SparseTallLinearSystem(J::SparseMatrixCSC{Float64, Int}; linsolver = :a
     return SparseTallLinearSystem(A, zeros(n), zeros(n), maketallws(m, n, linsolver), 0.0, nothing)
 end
 
-maketallsystem(J::SparseMatrixCSC{Float64, Int}, n, linsolver) = SparseTallLinearSystem(J; linsolver)
+makejacobiansystem(J::SparseMatrixCSC{Float64, Int}, n, linsolver) = SparseTallLinearSystem(J; linsolver)
 isfinitesystem(ls::SparseTallLinearSystem) = all(isfinite, nonzeros(ls.A.J)) && all(isfinite, ls.A.r)
 
 zero!(ls::SparseTallLinearSystem) = (fill!(ls.b, 0.0); markstale!(ls.A); ls)

@@ -132,7 +132,7 @@ function solve!(ls::DenseLinearSystem, ::StaticSymbol{:cg})
         copyto!(ls.x, ws.x)
         return cg_status(ws.stats)
     end
-    # Not built by `makelinearsystem` for :cg, so no preallocated workspace
+    # Not built by `makehessiansystem` for :cg, so no preallocated workspace
     (x, stats) = Krylov.cg(ls.A_scratch, ls.b; linesearch=true)
     copyto!(ls.x, x)
     return cg_status(stats)

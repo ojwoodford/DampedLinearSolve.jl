@@ -25,7 +25,7 @@ The rules:
   factorization of `A + λD`, and `eps(Float64)^2` for QR of `J`. [`max_diag`](@ref) gives the scale.
 
 ```jldoctest
-julia> ls = makelinearsystem([2.0 0.0; 0.0 8.0], :auto);
+julia> ls = makehessiansystem([2.0 0.0; 0.0 8.0], :auto);
 
 julia> getb(ls) .= [1.0, 1.0];
 

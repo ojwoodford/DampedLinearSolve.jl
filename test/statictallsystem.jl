@@ -71,3 +71,26 @@ end
 
 
 end
+
+# Paths the solve-level tests moved from SecondOrderOptimization did not reach on their own (rules.md 28)
+@testset "statictallsystem.jl: the remaining branches" begin
+    J = [1.0 2.0; 3.0 4.0; 5.0 6.0]
+    ls = DLS.StaticTallLinearSystem(copy(J))
+    A = getA(ls)
+    getr(A) .= [1.0, -1.0, 2.0]
+    @test size(A) == (2, 2) && size(A, 1) == 2 && size(A, 2) == 2
+    @test getJ(A) === A.J && getJ(A) == J
+    @test getr(A) === A.r
+    # J v and Jᵀ r
+    @test DLS.jmul!(zeros(3), getJ(A), [1.0, -2.0]) ≈ J * [1.0, -2.0]
+    g = zeros(2)
+    @test gradient!(g, A) === g
+    @test g ≈ J' * [1.0, -1.0, 2.0]
+    # isfinitesystem looks at both J and r
+    @test isfinitesystem(ls)
+    getr(A)[2] = NaN
+    @test !isfinitesystem(ls)
+    getr(A)[2] = 0.0
+    getJ(A)[3, 1] = -Inf
+    @test !isfinitesystem(ls)
+end

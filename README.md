@@ -15,12 +15,12 @@ optimizer to decide what to do next. It applies the damping it is given and neve
 using DampedLinearSolve
 
 H = [4.0 1.0; 1.0 3.0]
-ls = makelinearsystem(H, :cholesky)    # a dense system that writes into H
+ls = makehessiansystem(H, :cholesky)    # a dense system that writes into H
 getb(ls) .= [1.0, 2.0]                 # the gradient g
 dampen!(ls, 0.5)                       # λ = 0.5, D = I; H itself is not changed
 solve!(ls, :cholesky)                  # Success: getx(ls) == (H + 0.5I) \ g, the step is -getx(ls)
 
-tall = maketallsystem(20, 2, :auto)    # 20 residuals, 2 variables: A = JᵀJ never formed
+tall = makejacobiansystem(20, 2, :auto)    # 20 residuals, 2 variables: A = JᵀJ never formed
 ```
 
 The contract every system meets (construction, filling, damping, the solve and its statuses, the

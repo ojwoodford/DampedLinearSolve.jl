@@ -12,7 +12,7 @@ function mismatch_message(ls, asked, builtfor)
     msg = sprint(showerror, err)
     @test occursin("Internal inconsistency", msg)
     @test occursin("asked for linsolver = :$asked", msg)
-    @test occursin("built by makelinearsystem for linsolver = $builtfor", msg)
+    @test occursin("built by makehessiansystem or makejacobiansystem for linsolver = $builtfor", msg)
     return msg
 end
 
@@ -51,11 +51,11 @@ end
     # B1: a sparse system built for another solver throws an informative error rather than
     # trying to replace the `const` workspace field
     for solver in (:cg, :minres)
-        ls_wrong = DampedLinearSolve.makelinearsystem(copy(A_spd), static(:auto))
+        ls_wrong = DampedLinearSolve.makehessiansystem(copy(A_spd), static(:auto))
         ls_wrong.b .= b_vec
         @test_throws ArgumentError DampedLinearSolve.solve!(ls_wrong, static(solver))
         mismatch_message(ls_wrong, solver, ":auto or :ldl")
-        ls_right = DampedLinearSolve.makelinearsystem(copy(A_spd), static(solver))
+        ls_right = DampedLinearSolve.makehessiansystem(copy(A_spd), static(solver))
         ls_right.b .= b_vec
         @test DampedLinearSolve.solve!(ls_right, static(solver)) == Success
         @test isapprox(ls_right.x, x_exact; rtol=1e-5)
@@ -63,7 +63,7 @@ end
     # P2b: each workspace type names the solver it was built for
     for (built, asked, text) in ((:cg, :minres, ":cg"), (:minres, :cg, ":minres"),
                                  (:cholesky, :cg, ":cholesky"), (:qr, :minres, ":qr"))
-        ls_other = DampedLinearSolve.makelinearsystem(copy(A_spd), static(built))
+        ls_other = DampedLinearSolve.makehessiansystem(copy(A_spd), static(built))
         mismatch_message(ls_other, asked, text)
     end
     ls_odd = DampedLinearSolve.SparseLinearSystem(copy(A_spd), zeros(3), zeros(3), [1, 4, 7], :not_a_workspace)
@@ -76,7 +76,7 @@ end
     A_sc = sparse(D_sc * T_sc * D_sc)
     b_sc = A_sc * ones(n_sc)
     for solver in (:cg, :minres)
-        ls_sc = DampedLinearSolve.makelinearsystem(copy(A_sc), static(solver))
+        ls_sc = DampedLinearSolve.makehessiansystem(copy(A_sc), static(solver))
         ls_sc.b .= b_sc
         @test DampedLinearSolve.solve!(ls_sc, static(solver)) == Success
         @test norm(ls_sc.x .- 1) <= 1e-5 * sqrt(n_sc)
@@ -101,7 +101,7 @@ end
 
     for solver in (:cg, :minres)
         # M9: dense Krylov solves use a preallocated workspace
-        ls_dk = DampedLinearSolve.makelinearsystem(copy(A_dense), static(solver))
+        ls_dk = DampedLinearSolve.makehessiansystem(copy(A_dense), static(solver))
         @test ls_dk.solver_ws isa Krylov.KrylovWorkspace
         ls_dk.b .= b_vec
         @test DampedLinearSolve.solve!(ls_dk, static(solver)) == Success
@@ -121,7 +121,7 @@ end
     end
     # B4: CG reports nonpositive curvature as Indefinite, on both sparse and dense systems
     for H_indef in (copy(A_indef), Matrix(A_indef))
-        ls_indef = DampedLinearSolve.makelinearsystem(H_indef, static(:cg))
+        ls_indef = DampedLinearSolve.makehessiansystem(H_indef, static(:cg))
         ls_indef.b .= [1.0, 0.0, 0.0]
         @test DampedLinearSolve.solve!(ls_indef, static(:cg)) == Indefinite
         # Damping enough to make it positive definite gives Success
@@ -137,13 +137,13 @@ end
 
     if Pardiso.mkl_is_available() || Pardiso.panua_is_available()
         # B1: repeated solves on one system must not try to reassign the const workspace field
-        ls = DampedLinearSolve.makelinearsystem(copy(A_spd), static(:pardiso))
+        ls = DampedLinearSolve.makehessiansystem(copy(A_spd), static(:pardiso))
         ls.b .= b_vec
         for _ in 1:3
             @test DampedLinearSolve.solve!(ls, static(:pardiso)) == Success
             @test isapprox(ls.x, x_exact; rtol=1e-8)
         end
-        ls_wrong = DampedLinearSolve.makelinearsystem(copy(A_spd), static(:auto))
+        ls_wrong = DampedLinearSolve.makehessiansystem(copy(A_spd), static(:auto))
         @test_throws ArgumentError DampedLinearSolve.solve!(ls_wrong, static(:pardiso))
         mismatch_message(ls_wrong, :pardiso, ":auto or :ldl")
         mismatch_message(ls, :cg, ":pardiso")
@@ -155,7 +155,7 @@ end
         dampen!(ls, 0.0)
         # B8: an indefinite matrix is reported, not silently solved as indefinite
         for H_indef in (copy(A_indef), Matrix(A_indef))
-            ls_indef = DampedLinearSolve.makelinearsystem(H_indef, static(:pardiso))
+            ls_indef = DampedLinearSolve.makehessiansystem(H_indef, static(:pardiso))
             ls_indef.b .= b_vec
             @test DampedLinearSolve.solve!(ls_indef, static(:pardiso)) == NotPositiveDefinite
             dampen!(ls_indef, 10.0)
@@ -164,9 +164,9 @@ end
         end
     else
         # When shared library is not installed, attempting to solve throws an informative error
-        ls = DampedLinearSolve.makelinearsystem(copy(A_spd), static(:pardiso))
+        ls = DampedLinearSolve.makehessiansystem(copy(A_spd), static(:pardiso))
         @test_throws ErrorException DampedLinearSolve.solve!(ls, static(:pardiso))
-        ls_dense = DampedLinearSolve.makelinearsystem(Matrix(A_spd), static(:pardiso))
+        ls_dense = DampedLinearSolve.makehessiansystem(Matrix(A_spd), static(:pardiso))
         @test_throws ErrorException DampedLinearSolve.solve!(ls_dense, static(:pardiso))
     end
 
@@ -189,8 +189,8 @@ end
         @testset "$storage, $s, $kind, λ = $lambda" begin
         A = copy(base)
         f!(A)
-        ls = storage === :dense ? DampedLinearSolve.makelinearsystem(zeros(4, 4), s) :
-                                  DampedLinearSolve.makelinearsystem(sparse(ones(4, 4)), s)
+        ls = storage === :dense ? DampedLinearSolve.makehessiansystem(zeros(4, 4), s) :
+                                  DampedLinearSolve.makehessiansystem(sparse(ones(4, 4)), s)
         if storage === :sparse
             ls.A.nzval .= vec(A)
             ls.diag_cache .= diag(A)
@@ -214,7 +214,7 @@ end
     b = [1.0, 2.0, 3.0]
     # A dense system built for another solver has no Krylov workspace: the solve allocates its own
     for s in (:cg, :minres)
-        ls = makelinearsystem(copy(A), :auto)
+        ls = makehessiansystem(copy(A), :auto)
         getb(ls) .= b
         @test ls.solver_ws === nothing
         @test solve!(ls, static(s)) == Success
@@ -222,7 +222,24 @@ end
     end
     # A tall system built for QR is not solved by LSMR
     for J in (ones(4, 2), sparse(ones(4, 2)))
-        ls = maketallsystem(J, 2, :auto)
+        ls = makejacobiansystem(J, 2, :auto)
         @test_throws ArgumentError solve!(ls, static(:lsmr))
     end
+    # J as an operator for LSMR, and its adjoint
+    KExt = Base.get_extension(DampedLinearSolve, :KrylovExt)
+    J = [1.0 2.0; 3.0 4.0; 5.0 6.0]
+    op = KExt.TallOperator(J)
+    @test size(op) == (3, 2) && size(op, 1) == 3 && size(op, 2) == 2
+    opt = op'
+    @test opt isa KExt.TallOperatorT
+    @test size(opt) == (2, 3) && size(opt, 1) == 2 && size(opt, 2) == 3
+    @test eltype(op) == eltype(opt) == Float64
+    @test mul!(zeros(3), op, [1.0, -1.0]) ≈ J * [1.0, -1.0]
+    @test mul!(zeros(2), opt, [1.0, 0.0, 2.0]) ≈ J' * [1.0, 0.0, 2.0]
+    # Solving with Pardiso loaded but neither of its native libraries available is an error that
+    # says so (reached only on a machine without MKL or Panua Pardiso, so also called directly)
+    using Pardiso
+    PExt = Base.get_extension(DampedLinearSolve, :PardisoExt)
+    err = try PExt.pardiso_unavailable_error(); nothing catch e; e end
+    @test err isa ErrorException && occursin("neither Intel MKL Pardiso nor Panua Pardiso", err.msg)
 end

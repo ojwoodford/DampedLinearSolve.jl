@@ -22,7 +22,7 @@ Not in it: iterators, the choice or update of `λ`, trust radii, termination, re
 automatic differentiation, block storage, reductions, unsymmetric systems, LU, GPU arrays.
 
 ```jldoctest
-julia> ls = makelinearsystem([4.0 1.0; 1.0 3.0], :cholesky);
+julia> ls = makehessiansystem([4.0 1.0; 1.0 3.0], :cholesky);
 
 julia> getb(ls) .= [1.0, 2.0];
 
