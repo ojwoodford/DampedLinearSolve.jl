@@ -177,7 +177,7 @@ getx(ls::AbstractLinearSystem) = ls.x
 
 getgrad(ls::AbstractLinearSystem) = getb(ls)
 
-# Whether every stored value of the system's matrix is finite. The iterators ask after a failed solve:
+# Whether every stored value of the system's matrix is finite. An optimizer asks after a failed solve:
 # damping cannot repair a non-finite matrix, so they stop retrying (each system type has a method).
 isfinitesystem(ls::Union{StaticLinearSystem, DenseLinearSystem}) = all(isfinite, ls.A)
 isfinitesystem(ls::SparseLinearSystem) = all(isfinite, nonzeros(ls.A))
@@ -292,7 +292,7 @@ end
 
 # The smallest damping the solver resolves, relative to the diagonal: below about eps times the
 # diagonal, Cholesky of A + λD no longer sees the damping. The tall system, solved by QR of J,
-# tolerates about eps² (see tallsystem.jl). The iterators cap the floor at 1e-12 (`lambdafloor`).
+# tolerates about eps² (see tallsystem.jl).
 dampingfloor(ls) = eps(Float64)
 
 # Change in the undamped quadratic model, 0.5 dx'H dx + g'dx, for a step dx (negative for a

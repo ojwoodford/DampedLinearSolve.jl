@@ -187,7 +187,7 @@ end
     DenseTallLinearSystem(J::Matrix{Float64})
     DenseTallLinearSystem(m::Integer, n::Integer)
 
-The linear system of a [`JacobianObjective`](@ref): the normal equations `(JᵀJ + λD) x = Jᵀr`,
+The tall linear system of a residual-and-Jacobian problem: the normal equations `(JᵀJ + λD) x = Jᵀr`,
 with `J` dense (`m × n`, writing into the given matrix, or its own) and `JᵀJ` never formed.
 It meets the [`AbstractLinearSystem`](@ref) interface with `getA(ls)` a [`TallHessian`](@ref)
 holding `J` and `r`, and `getb(ls)` the gradient `Jᵀr`.
@@ -196,24 +196,22 @@ holding `J` and `r`, and `getb(ls)` the gradient `Jᵀr`.
 (`O(mn²)`), and then, for each damping value, factors the `2n × n` stacked matrix
 `[R; √λ D^½]` (`O(n³)`, independent of `m`), so retries with a larger `λ` are cheap.
 Memory: `J`, one `m × (n+1)` scratch copy of `[J r]` for the factorization, and `O(n²)` more.
-`copy_structure` (the trial system, with `callbackchangesstate = false`) adds its own `J` and
-shares the scratch: about three times the storage of `J` in all. An
-[`OptimizationWorkspace`](@ref) with a `Matrix` prototype owns its own `J`, so the caller's
-prototype is one more. An undamped
+`copy_structure` (the spare system an optimizer keeps for trial points) adds its own `J` and
+shares the scratch: about three times the storage of `J` in all. An undamped
 solve on a numerically rank-deficient `J` (smallest `|R[i,i]|` at or below
 `max(m, n)·eps` times the largest, which includes `m < n`) returns `NotPositiveDefinite`, as
 Cholesky does on singular normal equations; a `NaN` or `Inf` in `J` or `r` also returns
 `NotPositiveDefinite`, with `x` set to `NaN`. Nothing is allocated after construction.
 
 The factorization and the squared column norms of `J` (the diagonal of `JᵀJ`, used by `max_diag`
-and by the Marquardt scaling of `:levenbergmarquardt_dtd`) are computed once per linearization.
-`zero!(ls)` does not zero `J` or `r`: `resjac!` sets them, so `zero!` only invalidates the
-factorization and the column norms (and zeroes `b`, which the linearization then overwrites).
-Code that writes `getA(ls).J` or `.r` directly must call `zero!` (before or after writing), or
-`SecondOrderOptimization.markstale!(getA(ls))`; the linearization wrapper does this itself.
+and `getdiag!`, for a Marquardt scaling) are computed once per linearization. `zero!(ls)` does not
+zero `J` or `r`: the linearization sets them, so `zero!` only invalidates the factorization and the
+column norms (and zeroes `b`, which the linearization then overwrites). Code that writes
+`getJ(getA(ls))` or `getr(getA(ls))` must call `zero!` (before or after writing), or
+`markstale!(getA(ls))`.
 
 `DenseTallLinearSystem(J)` uses `J` as its storage with the values it holds, as does
-[`optimize`](@ref) with a `Matrix` prototype; with an integer `m`, `J` starts as zeros.
+`maketallsystem` with a `Matrix` prototype; with an integer `m`, `J` starts as zeros.
 `copy_structure` copies `J`, so a trial system starts with the same entries.
 """
 mutable struct DenseTallLinearSystem{W} <: AbstractTallLinearSystem
@@ -261,11 +259,11 @@ function solve_reduced! end
 # A small problem with a static number of variables (`n` a `StaticInt`) gets the static system
 # (statictallsystem.jl). The choice depends on m, known only at run time, so it is made here, once,
 # when the system is built.
-function tall_linearsystem(m::Integer, n, linsolver)
+function maketallsystem(m::Integer, n, linsolver)
     usesstatictall(m, n, linsolver) && return StaticTallLinearSystem(zeros(MMatrix{Int(m), dynamic(n), Float64}))
     return DenseTallLinearSystem(m, dynamic(n); linsolver)
 end
-function tall_linearsystem(J::Matrix{Float64}, n, linsolver)
+function maketallsystem(J::Matrix{Float64}, n, linsolver)
     usesstatictall(size(J, 1), n, linsolver) && return StaticTallLinearSystem(J)
     return DenseTallLinearSystem(J; linsolver)
 end
@@ -396,9 +394,8 @@ dampingfloor(ls::AbstractTallLinearSystem) = eps(Float64)^2
 getdiag!(d::AbstractVector, ls::AbstractTallLinearSystem) = copyto!(d, colnorms2!(ls.A))
 
 # The Jacobian prototypes the tall systems are built from: their checks, size and solvers
-const JACOBIAN_SUPPORT = "JacobianObjective supports every iterator, with a Matrix{Float64} or SparseMatrixCSC{Float64, Int} Jacobian prototype or an integer number of residuals m, and linsolver = :auto or :qr;" *
-    " or, with BlockLinearSystems.jl loaded, a SchurBlockJacobian{Float64, Matrix{Float64}} or SchurBlockJacobian{Float64, SparseMatrixCSC{Float64, Int}}, linsolver = :auto, :qr, :cholesky or :ldl." *
-    " Every prototype also takes linsolver = :lsmr, with Krylov.jl loaded"
+const JACOBIAN_SUPPORT = "A tall system is built from a Matrix{Float64} or SparseMatrixCSC{Float64, Int} Jacobian prototype or an integer number of residuals m, with linsolver = :auto or :qr, or :lsmr with Krylov.jl loaded;" *
+    " a package that implements the linear-system contract for its own prototype adds it (BlockLinearSystems.jl adds SchurBlockJacobian)"
 
 # The Jacobian prototype: a Matrix{Float64} with at least one row, or an integer m >= 1
 function checkjacobian(J)
@@ -419,13 +416,13 @@ function checkjacobian(J)
 end
 
 # The number of residuals a Jacobian prototype stands for
-nresiduals_of(J) = J isa Integer ? Int(J) : size(J, 1)
+jacobian_nrows(J) = J isa Integer ? Int(J) : size(J, 1)
 
-# The prototype's column count (nothing for an integer m, whose J is sized from x0), and the solvers it
+# The prototype's column count (nothing for an integer m, whose J is sized by the number of variables), and the solvers it
 # accepts. An extension adds methods for its prototype types.
 jacobian_ncols(J::AbstractMatrix) = size(J, 2)
 jacobian_ncols(J) = nothing
 function check_jacobian_linsolver(J, s::Symbol)
-    s in (:auto, :qr, :lsmr) || throw(ArgumentError("linsolver = :$s is not supported with a JacobianObjective. $JACOBIAN_SUPPORT."))
+    s in (:auto, :qr, :lsmr) || throw(ArgumentError("linsolver = :$s is not supported by the tall system of a $(typeof(J)) Jacobian prototype. $JACOBIAN_SUPPORT."))
     return nothing
 end

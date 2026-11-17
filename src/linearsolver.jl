@@ -6,9 +6,8 @@ builtfor(::SparseArrays.CHOLMOD.Factor) = ":cholesky"
 builtfor(::Nothing) = ":qr"
 builtfor(ws) = "an unknown solver (workspace type $(typeof(ws)))"
 
-# The error for a system solved with a solver it was not built for. A user cannot reach it: an
-# `OptimizationWorkspace` is keyed on the options' type, which includes the solver, so a workspace
-# reused with another `linsolver` is rebuilt. Only code calling `solve!` directly can.
+# The error for a system solved with a solver it was not built for: a system is solved with the
+# linsolver it was built for, so only a caller that mixes the two can reach it.
 solverworkspace(ls) = ls.solver_ws
 function solvermismatch(ls, asked::Symbol)
     throw(ArgumentError("Internal inconsistency: solve! was asked for linsolver = :$asked, but this " *

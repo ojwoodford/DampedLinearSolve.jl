@@ -1,22 +1,22 @@
 module KrylovExt
 
-using SecondOrderOptimization
+using DampedLinearSolve
 using Krylov
 using SparseArrays
 using LinearAlgebra
 using Static
 
-import SecondOrderOptimization: validatelinsolver, makesparsews, makedensews, solve!
-import SecondOrderOptimization: AbstractLinearSystem, SparseLinearSystem, DenseLinearSystem
-import SecondOrderOptimization: SolveStatus, Success, NotPositiveDefinite, Indefinite
-import SecondOrderOptimization: uniformscaling!, damp_marquardt!, builtfor, solvermismatch
-import SecondOrderOptimization: DenseTallLinearSystem, SparseTallLinearSystem, maketallws, jmul!, jtr!
-import SecondOrderOptimization: LSMR_ETOL, LSMR_AXTOL, LSMR_BTOL, LSMR_CONLIM
+import DampedLinearSolve: validatelinsolver, makesparsews, makedensews, solve!
+import DampedLinearSolve: AbstractLinearSystem, SparseLinearSystem, DenseLinearSystem
+import DampedLinearSolve: SolveStatus, Success, NotPositiveDefinite, Indefinite
+import DampedLinearSolve: uniformscaling!, damp_marquardt!, builtfor, solvermismatch
+import DampedLinearSolve: DenseTallLinearSystem, SparseTallLinearSystem, maketallws, jmul!, jtr!
+import DampedLinearSolve: LSMR_ETOL, LSMR_AXTOL, LSMR_BTOL, LSMR_CONLIM
 
 # Validation of Krylov solver symbols
 validatelinsolver(::StaticSymbol{:cg}) = true
 validatelinsolver(::StaticSymbol{:minres}) = true
-validatelinsolver(::StaticSymbol{:lsmr}) = true   # for a JacobianObjective only; a HessianObjective rejects it
+validatelinsolver(::StaticSymbol{:lsmr}) = true   # for a tall system: on the normal equations it would square their condition number again
 
 # A Krylov workspace plus storage for a Jacobi (diagonal) preconditioner
 struct JacobiWorkspace{W}
@@ -66,7 +66,7 @@ function solve!(ls::SparseLinearSystem, ::StaticSymbol{:cg})
     jws = check_krylov_ws(ls, JacobiWorkspace{<:Krylov.CgWorkspace}, :cg)
     ws = jws.ws
     # Krylov's CG throws, rather than reporting, on a non-finite operator
-    SecondOrderOptimization.isfinitesystem(ls) || return NotPositiveDefinite
+    DampedLinearSolve.isfinitesystem(ls) || return NotPositiveDefinite
     if ls.lambda > 0
         if isnothing(ls.scaling)
             uniformscaling!(ls, ls.lambda)
@@ -117,7 +117,7 @@ end
 
 # DenseLinearSystem execution
 function solve!(ls::DenseLinearSystem, ::StaticSymbol{:cg})
-    SecondOrderOptimization.isfinitesystem(ls) || return NotPositiveDefinite   # Krylov's CG would throw
+    DampedLinearSolve.isfinitesystem(ls) || return NotPositiveDefinite   # Krylov's CG would throw
     copyto!(ls.A_scratch, ls.A)
     if ls.lambda > 0
         if isnothing(ls.scaling)

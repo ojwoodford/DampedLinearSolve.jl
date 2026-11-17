@@ -1,10 +1,35 @@
 """
+    AbstractLinearSystem
+
+Supertype of the linear systems: a symmetric matrix `A`, a vector `b` and a solution `x` of
+dimension `n`, and a damping to apply when solving. The built-in systems are built by
+[`makelinearsystem`](@ref) (static, dense and sparse `A`) and [`maketallsystem`](@ref) (`A = JᵀJ`
+held as a Jacobian `J` and a residual `r`, dense, sparse or static). A new system type implements
+the functions of the contract below, as methods of `DampedLinearSolve`'s functions, and should
+pass [`check_linear_system`](@ref). The documentation's "The linear-system contract" page states
+each rule.
+
+| Function | Contract |
+|:---|:---|
+| [`getA`](@ref), [`getb`](@ref), [`getx`](@ref) | The storage of `A`, `b` (length `n`) and `x` (length `n`). |
+| [`zero!`](@ref) | Prepares a fresh fill: zeroes `b` and accumulated storage, invalidates what was computed from the old fill. |
+| [`getJ`](@ref), [`getr`](@ref), [`gradient!`](@ref), [`markstale!`](@ref) | A tall system's storage: `J` and `r`, `b = Jᵀr`, and "`J` or `r` was written". |
+| [`dampen!`](@ref) | Records `λI` or `λ·Diagonal(s)`, applied only inside `solve!`. |
+| [`solve!`](@ref) | Solves the damped system into `x`, leaving `A` and `b` as filled; returns a [`SolveStatus`](@ref). |
+| [`max_diag`](@ref), [`getdiag!`](@ref), [`quadform`](@ref), [`quadratic_model_change`](@ref), [`dampingfloor`](@ref), [`isfinitesystem`](@ref) | Queries on the undamped system. |
+| [`copy_structure`](@ref), [`sharex`](@ref) | A spare system of the same structure, and sharing `x` with another. |
+"""
+AbstractLinearSystem
+
+"""
     SolveStatus
 
-Enum returned by [`solve!`](@ref) indicating the status of the linear system solution:
-- [`Success`](@ref): The linear system was solved successfully.
-- [`NotPositiveDefinite`](@ref): The matrix was found not to be positive definite during Cholesky or LDL factorization.
-- [`Indefinite`](@ref): The matrix was detected to be indefinite or negative curvature was encountered during solving.
+Enum returned by [`solve!`](@ref):
+- [`Success`](@ref): `x` solves the damped system, and is finite.
+- [`NotPositiveDefinite`](@ref): the factorization failed, or the solution is not finite: the damped
+  matrix is not positive definite, singular to working precision, or not finite. `x` is unspecified.
+- [`Indefinite`](@ref): the solve completed but found the damped matrix indefinite (`:ldl` from its
+  pivots, `:cg` from nonpositive curvature).
 """
 SolveStatus
 
@@ -18,104 +43,312 @@ Success
 """
     NotPositiveDefinite
 
-[`SolveStatus`](@ref) indicating that the matrix failed a positive-definiteness test (e.g. non-positive pivot in Cholesky).
+[`SolveStatus`](@ref) indicating that the factorization failed (for example a non-positive pivot in
+Cholesky) or that the solution is not finite.
 """
 NotPositiveDefinite
 
 """
     Indefinite
 
-[`SolveStatus`](@ref) indicating that the matrix was detected to be indefinite or negative curvature was encountered.
+[`SolveStatus`](@ref) indicating that the matrix was found indefinite, or negative curvature was
+encountered, by a solve that completed.
 """
 Indefinite
 
 """
-    zero!(ls)
+    makelinearsystem(H, linsolver) -> AbstractLinearSystem
+    makelinearsystem(n, linsolver) -> AbstractLinearSystem
 
-Prepares the linear system `ls` for a fresh linearization: zeroes the gradient vector and the
-Hessian matrix that `fdf!` accumulates into. For the tall system of a
-[`JacobianObjective`](@ref), whose `resjac!` sets `J` and `r` rather than adding to them, it
-only invalidates the cached factorization and column norms, and zeroes the gradient.
+A linear system whose `A` is stored as the prototype `H` describes, or, without a prototype, a
+system of `n` variables: static (`StaticArrays`, stack allocated) when `n` is a `Static.StaticInt`,
+dense when it is an `Int`.
 
-# Example
-```julia
-ls = SecondOrderOptimization.DenseLinearSystem(3)
-zero!(ls)
-```
-"""
-zero!
-
-"""
-    solve!(ls, solver=static(:auto)) -> SolveStatus
-
-Solves the linear system `A * x = b` in-place using the specified `solver` (a `Symbol` or a `StaticSymbol`) and returns the [`SolveStatus`](@ref) enum (`Success`, `NotPositiveDefinite`, `Indefinite`).
-
-# Supported Solver Identifiers
-- Core solvers: `:auto`, `:cholesky`, `:ldl`, `:qr`. (`OptimizationOptions` also accepts the enum constants [`auto_solver`](@ref), [`cholesky_solver`](@ref), [`ldl_solver`](@ref), [`qr_solver`](@ref), and holds the solver as a `StaticSymbol`.)
-- Extension solvers (when package is loaded):
-  - `using Krylov`: `:cg` (Conjugate Gradient), `:minres` (MINRES). On sparse systems, `:cg` and `:minres` are Jacobi (diagonal) preconditioned whenever the damped diagonal is positive.
-  - `using Pardiso`: `:pardiso` (Intel MKL PARDISO or Panua Pardiso multi-threaded direct sparse solver).
-
-Note: On `StaticLinearSystem`, `:qr` executes static LU decomposition via `\`, and `:ldl` uses Cholesky, falling back to LU when the matrix is not positive definite (the solve is then reported as `Indefinite`).
-
-# Example
-```julia
-ls = SecondOrderOptimization.makelinearsystem([2.0 0.0; 0.0 4.0], :auto)
-ls.b .= [4.0, 8.0]
-solve!(ls, :cholesky)   # Success; ls.x == [2.0, 2.0]
-```
-"""
-solve!
-
-"""
-    validatelinsolver(solver::Union{Symbol, StaticSymbol, OptimizationLinearSolver}) -> Bool
-
-Returns `true` if `solver` is a supported linear solver backend, or `false` otherwise.
-Extension solvers (`:cg`, `:minres` and `:lsmr`, or `:pardiso`) register validation methods when their respective packages (`Krylov.jl` or `Pardiso.jl`) are loaded.
-"""
-validatelinsolver
-
-"""
-    AbstractLinearSystem
-
-Supertype of the linear systems the iterators solve: the Hessian `A` and gradient `b` that `fdf!`
-fills, the step `x`, and the damping to apply. The built-in systems are `StaticLinearSystem`,
-`DenseLinearSystem`, `SparseLinearSystem` and [`DenseTallLinearSystem`](@ref) (for a
-[`JacobianObjective`](@ref): `A = JᵀJ` held implicitly as `J` and `r`, `b = Jᵀr`, and the
-iterators' `fdf!` a wrapper that calls `resjac!` and forms `b`), and, with BlockLinearSystems.jl loaded,
-`DenseSchurLinearSystem` and `SparseSchurLinearSystem`. A new system type must provide the functions
-below (those not exported are extended as `SecondOrderOptimization.name`), and should pass
-[`check_linear_system`](@ref).
-
-# Linear system interface
-
-| Function | Contract |
-|:---|:---|
-| `makelinearsystem(H, linsolver)`, `makelinearsystem(n, linsolver)` | Builds the system from the Hessian prototype `H` (see below for which type each `H` gives), or, without one, for `n` variables: static when `n` is a `StaticInt`, dense when it is an `Int`. `linsolver` is used to preallocate a factorization or Krylov workspace; a sparse system must then be solved with that same solver. |
-| `getA(ls)`, `getb(ls)`, `getx(ls)` | `A` is the Hessian storage and `b` the gradient vector that `fdf!(b, A, x)` fills; `x` is the vector `solve!` writes. `b` and `x` have length `n`. The iterators read and negate `x`, and dogleg writes its own step into it. `A` must support `dot(v, A, v)` (`LinearAlgebra`'s three-argument `dot`), or have a method of the internal `quadform(A, v)`, for `v` of the type of `b`. |
-| `zero!(ls)` | Prepares the system for a fresh linearization, keeping its structure (pattern, workspaces): storage that `fdf!` accumulates into (`A`, `b`) is zeroed. A tall system only invalidates its factorization and column norms (and zeroes `b`), since `resjac!` overwrites `J` and `r`. |
-| `dampen!(ls, λ)`, `dampen!(ls, λ, s)` | Records damping without changing `A`: `solve!` then solves with `A + λI`, or `A + λ Diagonal(s)` (`s` in the units of `diag(A)`, not squared). Each call replaces the damping set before, including the scaling; `dampen!(ls, λ, nothing)` is `dampen!(ls, λ)`, and `λ = 0` is undamped. |
-| `solve!(ls, linsolver) -> SolveStatus` | Solves the damped system `A x = b` into `getx(ls)` (the step is `-x`; the iterators negate it). Returns `Success` when `x` solves it; `NotPositiveDefinite` when the factorization failed (`x` is then unspecified); `Indefinite` when it solved but found `A` indefinite (from `:ldl`, and CG's nonpositive curvature). The iterators treat anything but `Success` as failure: Newton shifts the diagonal, Levenberg-Marquardt raises `λ`, and dogleg shifts the diagonal as Newton does, taking the Cauchy step only if every shift fails. Leaves `A` and `b` exactly as written, damped or not, whether the solve succeeds or fails. `linsolver` may be a `Symbol` or a `StaticSymbol`. |
-| `copy_structure(ls)` | A new system with the same structure and its own `A` and `b` (contents unspecified). It may share `x` and factorization workspaces with `ls`, provided each `solve!` is self-contained, so that solving one never changes the other's next solution. |
-| `sharex(ls, from)` | `ls`, or a copy of it sharing its `A` and `b`, whose `getx` is `getx(from)`. |
-| `SecondOrderOptimization.max_diag(ls)` | The largest absolute diagonal entry of `A`; `NaN` if a diagonal entry is `NaN` (as `max` propagates it). |
-| `SecondOrderOptimization.dampingfloor(ls)` | The smallest damping the solver resolves, relative to the diagonal: `eps(Float64)` by default (Cholesky of `A + λD`), `eps(Float64)^2` for the tall system (QR of `J`). Levenberg-Marquardt floors its damping at `min(dampingfloor(ls) * max_diag(ls), 1e-12)` for `:levenbergmarquardt` (1e-12 if `max_diag` is not finite or is zero), and at `min(dampingfloor(ls), 1e-12)` for `:levenbergmarquardt_dtd`, whose `λ` multiplies the scaled diagonal: the floor can be lower than the former constant 1e-12, never higher. |
-| `SecondOrderOptimization.getdiag!(d, ls)` | Writes the diagonal of the undamped `A` into `d` and returns it (for a tall system, the squared column norms of `J`). `:levenbergmarquardt_dtd` builds its scaling from it: the running maximum of its absolute values, with a relative floor. The generic method reads `A[i, i]`; a system whose `A` can't be indexed needs its own method (the sparse, Schur and tall systems have one). |
-| `quadratic_model_change(ls, dx)` | `dx' A dx / 2 + b' dx`, undamped. The generic method uses `quadform(getA(ls), dx)` and `fast_dot(getb(ls), dx)`. |
-
-Which system `makelinearsystem` builds:
-- a size `n`: a static system for a `StaticInt`, a dense one for an `Int`. The optimizer asks for one
-  when `H = nothing`: static when `nvars(x0)` is a static size (a `Number`, a `StaticVector`, a tuple
-  of them) of at most [`MAX_STATIC_SYSTEM`](@ref) (16), otherwise dense of size `nvars(x0)`
-  ([`usesstaticsystem`](@ref)`(x0)` says which).
 - `H::MMatrix`: a static system that writes into `H`; any other `StaticMatrix`: a static system of
   its own.
 - `H::Matrix{Float64}`: a dense system that writes into `H`; any other `AbstractMatrix`: a dense
   system on a `Float64` copy.
 - `H::SparseMatrixCSC{Float64}`: a sparse system that writes into `H`, or into a copy with explicit
   zeros added if a diagonal entry is missing.
-- `H::SchurBlockHessian` (BlockLinearSystems.jl): a Schur-complement system, dense or sparse
-  according to the storage of `H.R`; `linsolver` (`:auto`, `:cholesky` or `:ldl`) names the solver
-  for the reduced system.
+
+A package that implements the contract adds methods for its own prototypes. `linsolver` (a
+`Symbol` or a `StaticSymbol`) is used to preallocate the solver's workspace, and the system must be
+solved with it. Validate `H` first with [`checkhessian`](@ref).
+
+# Example
+```julia
+ls = makelinearsystem(zeros(3, 3), :ldl)      # dense, Bunch–Kaufman workspace preallocated
+ls = makelinearsystem(static(2), :auto)        # static 2 × 2
+```
 """
-AbstractLinearSystem
+makelinearsystem
+
+"""
+    maketallsystem(J, n, linsolver) -> AbstractLinearSystem
+
+A tall linear system for `n` variables: `A = JᵀJ` held as the Jacobian `J` and the residual `r`
+([`getJ`](@ref), [`getr`](@ref)), `b = Jᵀr`, and each solve the solution of
+`min ‖J x − r‖² + λ xᵀD x` from `J`, without forming `JᵀJ`.
+
+- `J::Matrix{Float64}`: a dense system that writes into `J` (with the values it holds); static
+  (`StaticArrays`) when `n` is a `Static.StaticInt`, `linsolver` is QR (`:auto` or `:qr`) and
+  `m·n` is small.
+- `J::Integer`: the same, for `m = J` residuals, with its own `J` starting as zeros.
+- `J::SparseMatrixCSC{Float64, Int}`: a sparse system, solved by SuiteSparse's SPQR, its symbolic
+  analysis done here, once.
+
+`linsolver` is `:auto` or `:qr` (QR of `J`), or `:lsmr` with Krylov.jl loaded. Validate `J` first
+with [`checkjacobian`](@ref) and [`check_jacobian_linsolver`](@ref).
+
+# Example
+```julia
+ls = maketallsystem(20, 3, :auto)     # 20 residuals, 3 variables, dense
+```
+"""
+maketallsystem
+
+"""
+    structurekey(P)
+
+A value equal for two prototypes from which systems of the same structure are built (for a matrix,
+its type and size), for a caller that caches systems. A package with its own prototype type adds a
+method.
+"""
+structurekey
+
+"""
+    checkhessian(H, n::Integer) -> nothing
+
+Throws, before anything is built, if `H` cannot be the Hessian prototype of a system of `n`
+variables: a `DimensionMismatch` for a matrix that is not `n × n`. `H = nothing` (no prototype)
+passes.
+"""
+checkhessian
+
+"""
+    checkjacobian(J) -> nothing
+
+Throws an `ArgumentError` if `J` is not a Jacobian prototype a tall system can be built from: a
+`Matrix{Float64}` or `SparseMatrixCSC{Float64, Int}` with at least one row, or an integer number of
+residuals `m ≥ 1` (or a prototype a package that implements the contract adds).
+"""
+checkjacobian
+
+"""
+    check_jacobian_linsolver(J, linsolver::Symbol) -> nothing
+
+Throws an `ArgumentError` if the tall system of the Jacobian prototype `J` does not take
+`linsolver`. The built-in prototypes take `:auto`, `:qr` and `:lsmr` (the last with Krylov.jl
+loaded, which [`checklinsolver`](@ref) checks).
+"""
+check_jacobian_linsolver
+
+"""
+    jacobian_ncols(J) -> Union{Int, Nothing}
+
+The number of columns of the Jacobian prototype `J` (the number of variables of its system), or
+`nothing` for an integer `m`, whose system is sized by the `n` passed to [`maketallsystem`](@ref).
+"""
+jacobian_ncols
+
+"""
+    jacobian_nrows(J) -> Int
+
+The number of residuals the Jacobian prototype `J` stands for: `m` for an integer, the number of
+rows of a matrix.
+"""
+jacobian_nrows
+
+"""
+    checklinsolver(linsolver) -> true
+
+Returns `true` if a solver of that name is available, and otherwise throws an `ArgumentError` that
+says which package provides it (`:cg`, `:minres` and `:lsmr`: Krylov.jl; `:pardiso`: Pardiso.jl), or
+that the name is unknown. `linsolver` is a `Symbol` or a `StaticSymbol`.
+"""
+checklinsolver
+
+"""
+    validatelinsolver(linsolver::Union{Symbol, StaticSymbol}) -> Bool
+
+Returns `true` if `linsolver` names a solver of a loaded package, `false` otherwise. The built-in
+solvers are `:auto`, `:cholesky`, `:ldl` and `:qr`; loading Krylov.jl adds `:cg`, `:minres` and
+`:lsmr`, and loading Pardiso.jl adds `:pardiso`.
+"""
+validatelinsolver
+
+"""
+    getA(ls)
+
+The storage of the system's matrix `A`: a `Matrix`, an `MMatrix`, a `SparseMatrixCSC`, or a storage
+type of the system's own (for a tall system, one holding `J` and `r`: see [`getJ`](@ref)).
+"""
+getA
+
+"""
+    getb(ls) -> AbstractVector
+
+The system's right-hand side `b`, of length `n`. For a tall system it is `Jᵀr`, formed by
+[`gradient!`](@ref).
+"""
+getb
+
+"""
+    getx(ls) -> AbstractVector
+
+The vector [`solve!`](@ref) writes the solution into, of length `n`.
+"""
+getx
+
+"""
+    zero!(ls)
+
+Prepares the system for a fresh fill, keeping its structure (pattern, workspaces): zeroes `b` and
+any storage that is accumulated into (`A` of a Hessian system), and invalidates everything computed
+from the previous fill. A tall system's `J` and `r` are set by the fill, not accumulated, so they are
+not zeroed; their factorization and column norms are invalidated.
+
+# Example
+```julia
+ls = makelinearsystem(3, :auto)
+zero!(ls)
+```
+"""
+zero!
+
+"""
+    getJ(A)
+
+The Jacobian storage of the tall system storage `A = getA(ls)`, which the caller writes (it is set,
+not accumulated). After writing it and [`getr`](@ref)`(A)`, call [`gradient!`](@ref) and
+[`markstale!`](@ref).
+"""
+getJ
+
+"""
+    getr(A)
+
+The residual storage of the tall system storage `A = getA(ls)`, which the caller writes.
+"""
+getr
+
+"""
+    gradient!(b, A) -> b
+
+Writes `b = Jᵀr` from the tall storage `A`'s current `J` and `r` (call it with `b = getb(ls)`). For a
+sparse `J` it first checks that the pattern is the one the system was built for, and throws an
+`ArgumentError` if an entry was added.
+"""
+gradient!
+
+"""
+    markstale!(A) -> A
+
+Marks the tall storage `A`'s factorization and column norms as out of date. Call it after writing
+`J` or `r` and before the next solve or query.
+"""
+markstale!
+
+"""
+    dampen!(ls, λ)
+    dampen!(ls, λ, s)
+
+Records the damping `λI`, or `λ·Diagonal(s)` with `s` in the units of the diagonal of `A` (for a tall
+system, of `JᵀJ`), not squared. The damping is applied only inside [`solve!`](@ref); `A` is left as
+it was filled. Each call replaces the damping set before, scaling included; `dampen!(ls, λ, nothing)`
+is `dampen!(ls, λ)`, and `λ = 0` is undamped.
+"""
+dampen!
+
+"""
+    solve!(ls, linsolver = static(:auto)) -> SolveStatus
+
+Solves the damped system `(A + λD) x = b` into [`getx`](@ref)`(ls)` with the solver `linsolver` (a
+`Symbol` or a `StaticSymbol`, the one the system was built for) and returns a [`SolveStatus`](@ref).
+`A` and `b` are left exactly as they were filled, whether the solve succeeds or fails.
+
+# Solvers
+- `:auto` (Cholesky for a static or dense `A`, LDLᵀ for a sparse one, QR of `J` for a tall system),
+  `:cholesky`, `:ldl` (Bunch–Kaufman for a dense `A`, LDLᵀ for a sparse one) and `:qr`.
+- With Krylov.jl loaded: `:cg` and `:minres` (dense and sparse `A`; Jacobi preconditioned on a sparse
+  `A` whenever the damped diagonal is positive) and `:lsmr` (a tall system, on `J`).
+- With Pardiso.jl loaded: `:pardiso` (sparse, and dense through a sparse copy).
+
+On a static system, `:qr` is an LU solve (StaticArrays has no pivoted QR), and `:ldl` uses Cholesky,
+falling back to LU when the matrix is not positive definite (the solve is then reported as
+`Indefinite`).
+
+# Example
+```julia
+ls = makelinearsystem([2.0 0.0; 0.0 4.0], :auto)
+getb(ls) .= [4.0, 8.0]
+solve!(ls, :cholesky)   # Success; getx(ls) == [2.0, 2.0]
+```
+"""
+solve!
+
+"""
+    max_diag(ls)
+
+The largest absolute diagonal entry of the undamped `A` (for a tall system, the largest squared
+column norm of `J`); `NaN` if a diagonal entry is `NaN`.
+"""
+max_diag
+
+"""
+    getdiag!(d, ls) -> d
+
+Writes the diagonal of the undamped `A` into `d` (for a tall system, the squared column norms of
+`J`) and returns `d`. For building a Marquardt scaling.
+"""
+getdiag!
+
+"""
+    quadform(A, v)
+
+The quadratic form `vᵀ A v` of the storage `A = getA(ls)` (for a tall system, `‖J v‖²`), with
+single-threaded loops for `Matrix`, `StaticArray` and `SparseMatrixCSC`; any other storage falls back
+to `LinearAlgebra.dot(v, A, v)`.
+"""
+quadform
+
+"""
+    quadratic_model_change(ls, dx)
+
+`dxᵀ A dx / 2 + bᵀ dx` for the undamped system: the change in the quadratic model for a step `dx`
+when `b` is the gradient (negative for a descent step).
+"""
+quadratic_model_change
+
+"""
+    dampingfloor(ls) -> Float64
+
+The smallest damping the system's solver resolves, relative to the diagonal: `eps(Float64)` for a
+factorization of `A + λD`, and `eps(Float64)^2` for a tall system, solved by QR of `J`, which works
+with the condition number of `J`.
+"""
+dampingfloor
+
+"""
+    isfinitesystem(ls) -> Bool
+
+Whether every stored value of `A` (for a tall system, of `J` and `r`) is finite. Damping cannot repair
+a non-finite matrix.
+"""
+isfinitesystem
+
+"""
+    copy_structure(ls)
+
+A system of the same structure with its own `A` and `b` (contents unspecified; a tall system's copy
+starts with the same `J`), for a trial point. It may share `x` and solver workspaces with `ls`;
+filling and solving one never changes the other's next solution.
+"""
+copy_structure
+
+"""
+    sharex(ls, from)
+
+`ls`, or a copy of it sharing its `A` and `b`, whose [`getx`](@ref) is `getx(from)`.
+"""
+sharex

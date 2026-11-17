@@ -190,7 +190,7 @@ end
 """
     SparseTallLinearSystem(J::SparseMatrixCSC{Float64, Int})
 
-The linear system of a [`JacobianObjective`](@ref) with a sparse Jacobian prototype: the normal
+The tall linear system of a residual-and-Jacobian problem with a sparse Jacobian prototype: the normal
 equations `(JᵀJ + λD) x = Jᵀr`, with `JᵀJ` never formed. `getA(ls)` is a
 [`SparseTallHessian`](@ref) holding `J` (the given matrix, used as storage) and `r`; `getb(ls)`
 is the gradient `Jᵀr`.
@@ -207,8 +207,8 @@ As for [`DenseTallLinearSystem`](@ref): an undamped solve on a numerically rank-
 largest column norm of the augmented matrix, which includes `m < n`) returns
 `NotPositiveDefinite`, as does a damped one whose augmented matrix is rank deficient at that
 tolerance, and a `NaN` or `Inf` in `J` or `r` returns `NotPositiveDefinite` with `x` set to
-`NaN`. `zero!` does not zero `J` or `r`. `resjac!` must write only entries the prototype stores:
-writing any other entry inserts it, which changes the pattern, and the linearization throws an
+`NaN`. `zero!` does not zero `J` or `r`. The linearization must write only entries the prototype
+stores: writing any other entry inserts it, which changes the pattern, and `gradient!` throws an
 `ArgumentError`.
 """
 mutable struct SparseTallLinearSystem{W} <: AbstractTallLinearSystem
@@ -226,7 +226,7 @@ function SparseTallLinearSystem(J::SparseMatrixCSC{Float64, Int}; linsolver = :a
     return SparseTallLinearSystem(A, zeros(n), zeros(n), maketallws(m, n, linsolver), 0.0, nothing)
 end
 
-tall_linearsystem(J::SparseMatrixCSC{Float64, Int}, n, linsolver) = SparseTallLinearSystem(J; linsolver)
+maketallsystem(J::SparseMatrixCSC{Float64, Int}, n, linsolver) = SparseTallLinearSystem(J; linsolver)
 isfinitesystem(ls::SparseTallLinearSystem) = all(isfinite, nonzeros(ls.A.J)) && all(isfinite, ls.A.r)
 
 zero!(ls::SparseTallLinearSystem) = (fill!(ls.b, 0.0); markstale!(ls.A); ls)

@@ -1,14 +1,14 @@
 module PardisoExt
 
-using SecondOrderOptimization
+using DampedLinearSolve
 using Pardiso
 using SparseArrays
 using Static
 
-import SecondOrderOptimization: validatelinsolver, makesparsews, solve!
-import SecondOrderOptimization: AbstractLinearSystem, SparseLinearSystem, DenseLinearSystem
-import SecondOrderOptimization: SolveStatus, Success, NotPositiveDefinite, Indefinite
-import SecondOrderOptimization: uniformscaling!, damp_marquardt!, ensure_diag_and_inds, builtfor, solvermismatch
+import DampedLinearSolve: validatelinsolver, makesparsews, solve!
+import DampedLinearSolve: AbstractLinearSystem, SparseLinearSystem, DenseLinearSystem
+import DampedLinearSolve: SolveStatus, Success, NotPositiveDefinite, Indefinite
+import DampedLinearSolve: uniformscaling!, damp_marquardt!, ensure_diag_and_inds, builtfor, solvermismatch
 
 # Validation of Pardiso solver symbol
 validatelinsolver(::StaticSymbol{:pardiso}) = true

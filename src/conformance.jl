@@ -154,8 +154,8 @@ dimension `n` whose Hessian storage can hold a dense symmetric matrix wherever i
 The test matrices are built inside that pattern and made diagonally dominant, so they are
 positive definite. Reading and writing the storage uses [`conformance_matrix`](@ref),
 [`conformance_fill!`](@ref) and [`conformance_fillb!`](@ref), which have methods for `Matrix`,
-`MMatrix`, `SparseMatrixCSC`, the [`TallHessian`](@ref) of a `DenseTallLinearSystem` and (with
-BlockLinearSystems loaded) `SchurBlockHessian`; [`conformance_traits`](@ref) says what the storage
+`MMatrix`, `SparseMatrixCSC` and the storage of the tall systems (and, from a package that implements
+the contract, its own storage); [`conformance_traits`](@ref) says what the storage
 can represent. For the tall storage, `JᵀJ` is compared with the test matrix to a relative `1e-10`
 (then exactly with itself), the indefinite-`A` checks are skipped, and when `m < n` the test
 matrix has rank `m`, the undamped solve must not return `Success`, and the solves that are
@@ -165,7 +165,7 @@ value for iterative solvers.
 The rules, for each solver:
 - `getA`, `getb`, `getx` have dimension `n`.
 - `solve!` returns `Success` for a positive-definite system and solves `A * x = b` into `getx`
-  (the iterators negate it to get the step), leaving `A` and `b` exactly as they were written:
+  (an optimizer negates it to get the step), leaving `A` and `b` exactly as they were written:
   undamped, damped, and also when the solve fails.
 - `dampen!(ls, λ)` solves `(A + λI) x = b`; `dampen!(ls, λ, s)` solves `(A + λ Diagonal(s)) x = b`;
   each replaces the damping set before, so returning to an earlier damping gives the identical `x`.
@@ -186,7 +186,7 @@ The rules, for each solver:
 # Example
 ```julia
 check_linear_system(s -> makelinearsystem(zeros(5, 5), s); n = 5, linsolvers = (:auto, :cholesky, :ldl, :qr))
-check_linear_system(s -> SecondOrderOptimization.DenseTallLinearSystem(8, 5); n = 5, linsolvers = (:auto, :qr))
+check_linear_system(s -> maketallsystem(8, 5, s); n = 5, linsolvers = (:auto, :qr))
 ```
 """
 function check_linear_system(make_ls; n::Integer, linsolvers, rtol::Real = 1e-8)
@@ -289,7 +289,7 @@ function check_linear_system_solver(make_ls, n, s, rtol)
     shared = sharex(other, ls)
     getx(shared) === getx(ls) || conformance_error("sharex(trial, ls) aliases x", s, "getx(sharex(trial, ls)) !== getx(ls)")
 
-    # Quadratic forms, with vectors of the types the iterators pass (the gradient's and the step's)
+    # Quadratic forms, with vectors of the types an optimizer passes (the gradient's and the step's)
     v = copy(getb(ls)); v .= conformance_vector(n, 2.1)
     isapprox(quadform(getA(ls), v), dot(v, Qw * v); rtol=1e-10) || conformance_error("quadform(getA(ls), v) == v' A v", s)
     dx = copy(getx(ls)); dx .= conformance_vector(n, 2.1)
