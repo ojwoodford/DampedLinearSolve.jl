@@ -1,0 +1,19 @@
+name = "DampedLinearSolve"
+uuid = "d0bc3897-303a-4c2a-8def-9d5e444f89b8"
+version = "0.1.0"
+authors = ["Oliver Woodford"]
+
+[deps]
+LDLFactorizations = "40e66cde-538c-5869-a4ad-c39174c6795b"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+Static = "aedffcd0-7271-4cad-89d0-dc628f76c6d3"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+
+[compat]
+LDLFactorizations = "0.10"
+LinearAlgebra = "1.10"
+SparseArrays = "1.10"
+Static = "0.8.7, 1"
+StaticArrays = "1"
+julia = "1.10"
