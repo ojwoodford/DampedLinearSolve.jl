@@ -1,5 +1,9 @@
 # DampedLinearSolve.jl
 
+[![CI](https://github.com/ojwoodford/DampedLinearSolve.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/ojwoodford/DampedLinearSolve.jl/actions/workflows/CI.yml)
+[![Docs](https://img.shields.io/badge/docs-dev-blue.svg)](https://ojwoodford.github.io/DampedLinearSolve.jl/dev/)
+[![codecov](https://codecov.io/gh/ojwoodford/DampedLinearSolve.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/ojwoodford/DampedLinearSolve.jl)
+
 Solve, without allocating, the damped linear problems a second-order optimizer poses,
 `(H + λD) x = −g` and `min ‖J x + r‖² + λ‖x‖²_D`, and report the outcome well enough for the
 optimizer to decide what to do next. It applies the damping it is given and never chooses it.
