@@ -211,7 +211,7 @@ column norms (and zeroes `b`, which the linearization then overwrites). Code tha
 `markstale!(getA(ls))`.
 
 `DenseTallLinearSystem(J)` uses `J` as its storage with the values it holds, as does
-`maketallsystem` with a `Matrix` prototype; with an integer `m`, `J` starts as zeros.
+`makejacobiansystem` with a `Matrix` prototype; with an integer `m`, `J` starts as zeros.
 `copy_structure` copies `J`, so a trial system starts with the same entries.
 """
 mutable struct DenseTallLinearSystem{W} <: AbstractTallLinearSystem
@@ -254,11 +254,11 @@ const LSMR_CONLIM = 1 / sqrt(eps(Float64))
 # A small problem with a static number of variables (`n` a `StaticInt`) gets the static system
 # (statictallsystem.jl). The choice depends on m, known only at run time, so it is made here, once,
 # when the system is built.
-function maketallsystem(m::Integer, n, linsolver)
+function makejacobiansystem(m::Integer, n, linsolver)
     usesstatictall(m, n, linsolver) && return StaticTallLinearSystem(zeros(MMatrix{Int(m), dynamic(n), Float64}))
     return DenseTallLinearSystem(m, dynamic(n); linsolver)
 end
-function maketallsystem(J::Matrix{Float64}, n, linsolver)
+function makejacobiansystem(J::Matrix{Float64}, n, linsolver)
     usesstatictall(size(J, 1), n, linsolver) && return StaticTallLinearSystem(J)
     return DenseTallLinearSystem(J; linsolver)
 end

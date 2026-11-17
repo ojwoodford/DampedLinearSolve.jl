@@ -34,11 +34,12 @@ The system applies the damping it is given; it never chooses it.
 
 ## Construction
 
-- `makelinearsystem(H, linsolver)`: a system whose `A` is stored as the prototype `H` describes;
-  `makelinearsystem(n, linsolver)`: a system of `n` variables with no prototype, static (stack
+- `makehessiansystem(H, linsolver)`: a system built from a Hessian prototype `H`, whose `A` is
+  stored as `H` describes;
+  `makehessiansystem(n, linsolver)`: a system of `n` variables with no prototype, static (stack
   allocated, `StaticArrays`) when `n` is a `Static.StaticInt`, dense when it is an `Int`. The caller
   decides between the two by the type of `n`.
-- `maketallsystem(J, n, linsolver)`: a tall system for the Jacobian prototype `J` (a
+- `makejacobiansystem(J, n, linsolver)`: a tall system built from a Jacobian prototype `J` (a
   `Matrix{Float64}`, a `SparseMatrixCSC{Float64, Int}`, or an integer number of residuals `m`) and `n`
   variables. With a static `n`, a dense `J` and a QR solver, the system is static when `m·n` is small.
 - `linsolver` (a `Symbol` or a `Static.StaticSymbol`) is used to preallocate the solver's workspace

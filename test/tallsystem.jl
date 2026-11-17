@@ -48,17 +48,17 @@ allocations(f::F, args::Vararg{Any, N}) where {F, N} = (f(args...); @allocated f
         for (m, n) in ((6, 6), (11, 6), (4, 6), (1, 1), (5, 1), (1, 3))
             @test check_linear_system(s -> DLS.DenseTallLinearSystem(m, n); n, linsolvers=(:auto, :qr)) === nothing
             # also built from an objective, with a prototype and with an integer m
-            @test check_linear_system(s -> maketallsystem(zeros(m, n), n, s); n, linsolvers=(:auto,)) === nothing
-            @test check_linear_system(s -> maketallsystem(m, n, s); n, linsolvers=(:qr,)) === nothing
+            @test check_linear_system(s -> makejacobiansystem(zeros(m, n), n, s); n, linsolvers=(:auto,)) === nothing
+            @test check_linear_system(s -> makejacobiansystem(m, n, s); n, linsolvers=(:qr,)) === nothing
         end
         @test DLS.conformance_traits(DLS.getA(DLS.DenseTallLinearSystem(4, 6))) == (exact = false, maxrank = 4, indefinite = false, accumulates = false)
     end
 
-    @testset "makelinearsystem writes into a Matrix prototype, or builds its own J" begin
+    @testset "makejacobiansystem writes into a Matrix prototype, or builds its own J" begin
         J = zeros(7, 3)
-        ls = maketallsystem(J, 3, :auto)
+        ls = makejacobiansystem(J, 3, :auto)
         @test ls isa DLS.DenseTallLinearSystem && DLS.getA(ls).J === J
-        ls = maketallsystem(7, 3, :auto)
+        ls = makejacobiansystem(7, 3, :auto)
         @test size(DLS.getA(ls).J) == (7, 3) && length(DLS.getA(ls).r) == 7 && length(getb(ls)) == 3 && length(getx(ls)) == 3
     end
 

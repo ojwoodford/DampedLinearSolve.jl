@@ -134,7 +134,7 @@ makesparsews(A, ::StaticSymbol{:qr}) = nothing
 makesparsews(A, ::StaticSymbol{S}) where S = nothing
 makesparsews(A, s::Symbol) = makesparsews(A, static(s))
 
-function makelinearsystem(H::SparseMatrixCSC{T}, linsolver) where T
+function makehessiansystem(H::SparseMatrixCSC{T}, linsolver) where T
     T === Float64 || throw(ArgumentError("The Hessian must be Float64; got a sparse prototype with element type $T. Pass a SparseMatrixCSC{Float64}."))
     A, diag_inds = ensure_diag_and_inds(H)
     sym = static(linsolver_symbol(linsolver))
@@ -143,11 +143,11 @@ function makelinearsystem(H::SparseMatrixCSC{T}, linsolver) where T
     return SparseLinearSystem(A, zeros(Float64, size(A, 1)), zeros(Float64, size(A, 1)), diag_inds, ws, diag_cache)
 end
 
-function makelinearsystem(H::MMatrix{N, N, Float64, N2}, linsolver) where {N, N2}
+function makehessiansystem(H::MMatrix{N, N, Float64, N2}, linsolver) where {N, N2}
     return StaticLinearSystem{N, N2, Float64}(H, MVector{N, Float64}(undef), MVector{N, Float64}(undef))
 end
 
-function makelinearsystem(H::StaticMatrix{N, N}, linsolver) where N
+function makehessiansystem(H::StaticMatrix{N, N}, linsolver) where N
     return StaticLinearSystem{N, Float64}()
 end
 
@@ -156,20 +156,20 @@ makedensews(n, s) = makedensews(n, static(linsolver_symbol(s)))
 makedensews(n, ::StaticSymbol{:ldl}) = DenseLDLWorkspace(n)
 makedensews(n, ::StaticSymbol) = nothing
 
-function makelinearsystem(H::Matrix{Float64}, linsolver)
+function makehessiansystem(H::Matrix{Float64}, linsolver)
     n = size(H, 1)
     return DenseLinearSystem{Float64}(H, zeros(Float64, n), zeros(Float64, n); solver_ws=makedensews(n, linsolver))
 end
 
-function makelinearsystem(H::AbstractMatrix, linsolver)
+function makehessiansystem(H::AbstractMatrix, linsolver)
     n = size(H, 1)
     return DenseLinearSystem{Float64}(Matrix{Float64}(H), zeros(Float64, n), zeros(Float64, n); solver_ws=makedensews(n, linsolver))
 end
 
 # Without a prototype: a system of `n` variables, static (StaticArrays) when `n` is a `StaticInt`
 # and dense when it is an `Int`. The caller decides which by the type of `n`.
-makelinearsystem(n::StaticInt, linsolver) = StaticLinearSystem{dynamic(n), Float64}()
-makelinearsystem(n::Integer, linsolver) = DenseLinearSystem{Float64}(Int(n); solver_ws=makedensews(Int(n), linsolver))
+makehessiansystem(n::StaticInt, linsolver) = StaticLinearSystem{dynamic(n), Float64}()
+makehessiansystem(n::Integer, linsolver) = DenseLinearSystem{Float64}(Int(n); solver_ws=makedensews(Int(n), linsolver))
 
 getA(ls::AbstractLinearSystem) = ls.A
 getb(ls::AbstractLinearSystem) = ls.b

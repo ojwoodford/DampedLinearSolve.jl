@@ -9,7 +9,7 @@ DocTestSetup = :(using DampedLinearSolve, LinearAlgebra, SparseArrays, Static)
 ```jldoctest dense
 julia> H = [4.0 1.0 0.0; 1.0 3.0 1.0; 0.0 1.0 2.0]; g = [1.0, 0.0, -1.0];
 
-julia> ls = makelinearsystem(copy(H), :ldl);    # Bunch–Kaufman workspace preallocated
+julia> ls = makehessiansystem(copy(H), :ldl);    # Bunch–Kaufman workspace preallocated
 
 julia> getA(ls) .= H; getb(ls) .= g;
 
@@ -29,7 +29,7 @@ An indefinite matrix is reported, not hidden:
 julia> getA(ls)[1, 1] = -4.0; dampen!(ls, 0.0); solve!(ls, :ldl)
 Indefinite::SolveStatus = 2
 
-julia> solve!(makelinearsystem(copy(getA(ls)), :cholesky), :cholesky)
+julia> solve!(makehessiansystem(copy(getA(ls)), :cholesky), :cholesky)
 NotPositiveDefinite::SolveStatus = 1
 ```
 
@@ -41,7 +41,7 @@ system is built.
 ```jldoctest sparse
 julia> H = spdiagm(-1 => fill(-1.0, 4), 0 => fill(2.5, 5), 1 => fill(-1.0, 4));
 
-julia> ls = makelinearsystem(copy(H), :auto); getb(ls) .= ones(5);
+julia> ls = makehessiansystem(copy(H), :auto); getb(ls) .= ones(5);
 
 julia> dampen!(ls, 1e-3); solve!(ls, :auto)
 Success::SolveStatus = 0
@@ -61,7 +61,7 @@ and marks the old factorization stale with [`markstale!`](@ref).
 ```jldoctest tall
 julia> J = [1.0 0.0; 1.0 1.0; 1.0 2.0; 1.0 3.0]; r = [1.0, 2.0, 2.0, 4.0];
 
-julia> ls = maketallsystem(4, 2, :auto); A = getA(ls);
+julia> ls = makejacobiansystem(4, 2, :auto); A = getA(ls);
 
 julia> getJ(A) .= J; getr(A) .= r; gradient!(getb(ls), A); markstale!(A);
 

@@ -11,8 +11,8 @@ builtfor(ws) = "an unknown solver (workspace type $(typeof(ws)))"
 solverworkspace(ls) = ls.solver_ws
 function solvermismatch(ls, asked::Symbol)
     throw(ArgumentError("Internal inconsistency: solve! was asked for linsolver = :$asked, but this " *
-        "$(nameof(typeof(ls))) was built by makelinearsystem for linsolver = $(builtfor(solverworkspace(ls))). " *
-        "A linear system must be solved with the linsolver that makelinearsystem built it with."))
+        "$(nameof(typeof(ls))) was built by makehessiansystem or makejacobiansystem for linsolver = $(builtfor(solverworkspace(ls))). " *
+        "A linear system must be solved with the linsolver it was built for."))
 end
 
 validatelinsolver(::StaticSymbol{:auto}) = true
@@ -273,7 +273,7 @@ function solve!(ls::DenseLinearSystem{Float64, DenseLDLWorkspace}, ::StaticSymbo
     return is_indefinite_packed(ls.A_scratch, ls.solver_ws.ipiv, 'U') ? Indefinite : Success
 end
 
-# Without a preallocated workspace (a system not built by `makelinearsystem`)
+# Without a preallocated workspace (a system not built by `makehessiansystem`)
 function solve!(ls::DenseLinearSystem, ::StaticSymbol{:ldl})
     copyto!(ls.A_scratch, ls.A)
     if ls.lambda > 0

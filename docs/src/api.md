@@ -10,8 +10,8 @@ DampedLinearSolve
 
 ```@docs
 AbstractLinearSystem
-makelinearsystem
-maketallsystem
+makehessiansystem
+makejacobiansystem
 structurekey
 checkhessian
 checkjacobian

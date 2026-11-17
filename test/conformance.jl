@@ -41,18 +41,18 @@ checker_message(make_ls; kwargs...) = try check_linear_system(make_ls; kwargs...
 
     @testset "StaticLinearSystem" begin
         for n in (1, 2, 5)
-            @test check_linear_system(s -> DLS.makelinearsystem(static(n), s); n, linsolvers=solvers) === nothing
-            @test check_linear_system(s -> DLS.makelinearsystem(zeros(MMatrix{n, n}), s); n, linsolvers=solvers) === nothing
-            @test DLS.makelinearsystem(static(n), :auto) isa DLS.StaticLinearSystem
+            @test check_linear_system(s -> DLS.makehessiansystem(static(n), s); n, linsolvers=solvers) === nothing
+            @test check_linear_system(s -> DLS.makehessiansystem(zeros(MMatrix{n, n}), s); n, linsolvers=solvers) === nothing
+            @test DLS.makehessiansystem(static(n), :auto) isa DLS.StaticLinearSystem
         end
     end
 
     @testset "DenseLinearSystem" begin
         for n in (1, 6)
-            @test check_linear_system(s -> DLS.makelinearsystem(zeros(n, n), s); n, linsolvers=solvers) === nothing
+            @test check_linear_system(s -> DLS.makehessiansystem(zeros(n, n), s); n, linsolvers=solvers) === nothing
             # also without the preallocated :ldl workspace
             @test check_linear_system(() -> DLS.DenseLinearSystem{Float64}(zeros(n, n), zeros(n), zeros(n)); n, linsolvers=solvers) === nothing
-            @test DLS.makelinearsystem(zeros(n, n), :auto) isa DLS.DenseLinearSystem
+            @test DLS.makehessiansystem(zeros(n, n), :auto) isa DLS.DenseLinearSystem
         end
     end
 
@@ -60,20 +60,20 @@ checker_message(make_ls; kwargs...) = try check_linear_system(make_ls; kwargs...
         n = 8
         pattern = spdiagm(-2 => ones(n - 2), -1 => ones(n - 1), 0 => ones(n), 1 => ones(n - 1), 2 => ones(n - 2))
         pattern[1, n] = pattern[n, 1] = 1.0
-        @test check_linear_system(s -> DLS.makelinearsystem(copy(pattern), s); n, linsolvers=solvers) === nothing
+        @test check_linear_system(s -> DLS.makehessiansystem(copy(pattern), s); n, linsolvers=solvers) === nothing
         # a prototype missing diagonal entries (they are inserted) and an Int32 index type
         missing_diag = sparse([1, 2, 3, 1, 4, 5, 6, 7, 8, 8, 7], [2, 1, 1, 3, 4, 5, 6, 7, 8, 7, 8], ones(11), n, n)
-        @test check_linear_system(s -> DLS.makelinearsystem(copy(missing_diag), s); n, linsolvers=solvers) === nothing
-        @test check_linear_system(s -> DLS.makelinearsystem(SparseMatrixCSC{Float64, Int32}(pattern), s); n, linsolvers=solvers) === nothing
-        @test DLS.makelinearsystem(copy(pattern), :auto) isa DLS.SparseLinearSystem
+        @test check_linear_system(s -> DLS.makehessiansystem(copy(missing_diag), s); n, linsolvers=solvers) === nothing
+        @test check_linear_system(s -> DLS.makehessiansystem(SparseMatrixCSC{Float64, Int32}(pattern), s); n, linsolvers=solvers) === nothing
+        @test DLS.makehessiansystem(copy(pattern), :auto) isa DLS.SparseLinearSystem
     end
 
     @testset "Krylov solvers" begin
         using Krylov
         n = 8
         pattern = spdiagm(-1 => ones(n - 1), 0 => ones(n), 1 => ones(n - 1))
-        @test check_linear_system(s -> DLS.makelinearsystem(copy(pattern), s); n, linsolvers=(:cg, :minres), rtol=1e-6) === nothing
-        @test check_linear_system(s -> DLS.makelinearsystem(zeros(n, n), s); n, linsolvers=(:cg, :minres), rtol=1e-6) === nothing
+        @test check_linear_system(s -> DLS.makehessiansystem(copy(pattern), s); n, linsolvers=(:cg, :minres), rtol=1e-6) === nothing
+        @test check_linear_system(s -> DLS.makehessiansystem(zeros(n, n), s); n, linsolvers=(:cg, :minres), rtol=1e-6) === nothing
     end
 
     @testset "Pardiso" begin
@@ -81,8 +81,8 @@ checker_message(make_ls; kwargs...) = try check_linear_system(make_ls; kwargs...
         if Pardiso.mkl_is_available() || Pardiso.panua_is_available()
             n = 8
             pattern = spdiagm(-1 => ones(n - 1), 0 => ones(n), 1 => ones(n - 1))
-            @test check_linear_system(s -> DLS.makelinearsystem(copy(pattern), s); n, linsolvers=(:pardiso,)) === nothing
-            @test check_linear_system(s -> DLS.makelinearsystem(zeros(n, n), s); n, linsolvers=(:pardiso,)) === nothing
+            @test check_linear_system(s -> DLS.makehessiansystem(copy(pattern), s); n, linsolvers=(:pardiso,)) === nothing
+            @test check_linear_system(s -> DLS.makehessiansystem(zeros(n, n), s); n, linsolvers=(:pardiso,)) === nothing
         else
             @test_skip "Pardiso library not available"
         end

@@ -7,7 +7,7 @@ optimizer to decide what to do next. It applies the damping it is given and neve
 
 The contract a linear system meets is in the documentation ("The linear-system contract"); the
 systems for `SMatrix`, `Matrix` and `SparseMatrixCSC` Hessians and Jacobians are built by
-[`makelinearsystem`](@ref) and [`maketallsystem`](@ref), and [`check_linear_system`](@ref) checks
+[`makehessiansystem`](@ref) and [`makejacobiansystem`](@ref), and [`check_linear_system`](@ref) checks
 an implementation.
 """
 module DampedLinearSolve
@@ -18,7 +18,7 @@ using LinearAlgebra, SparseArrays, StaticArrays, Static, LDLFactorizations
 # exported name is documented in the API reference, and nothing else is exported. The test suite
 # pins this list (test/publicapi.jl).
 export AbstractLinearSystem, SolveStatus, Success, NotPositiveDefinite, Indefinite
-export makelinearsystem, maketallsystem, structurekey
+export makehessiansystem, makejacobiansystem, structurekey
 export checkhessian, checkjacobian, check_jacobian_linsolver, jacobian_ncols, jacobian_nrows
 export checklinsolver, validatelinsolver
 export getA, getb, getx, zero!, getJ, getr, gradient!, markstale!

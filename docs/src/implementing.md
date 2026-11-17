@@ -12,7 +12,7 @@ functions for it. An optimizer written against the contract then runs on it unch
 
 For a system type `MySystem`:
 
-1. **Construction**: a method of [`makelinearsystem`](@ref) (or [`maketallsystem`](@ref)) for your
+1. **Construction**: a method of [`makehessiansystem`](@ref) (or [`makejacobiansystem`](@ref)) for your
    prototype type, and, if the prototype has checks, of [`checkhessian`](@ref) (or
    [`checkjacobian`](@ref), [`jacobian_ncols`](@ref), [`jacobian_nrows`](@ref),
    [`check_jacobian_linsolver`](@ref)). Add [`structurekey`](@ref) for a prototype that is not a
@@ -40,7 +40,7 @@ systems with the function you pass, fills them through the hooks, and checks eve
 checked from outside; it throws naming the first rule broken.
 
 ```jldoctest
-julia> check_linear_system(s -> makelinearsystem(zeros(4, 4), s); n = 4, linsolvers = (:auto, :cholesky, :ldl, :qr))
+julia> check_linear_system(s -> makehessiansystem(zeros(4, 4), s); n = 4, linsolvers = (:auto, :cholesky, :ldl, :qr))
 
-julia> check_linear_system(s -> maketallsystem(6, 4, s); n = 4, linsolvers = (:auto, :qr))
+julia> check_linear_system(s -> makejacobiansystem(6, 4, s); n = 4, linsolvers = (:auto, :qr))
 ```

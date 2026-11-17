@@ -185,8 +185,8 @@ The rules, for each solver:
 
 # Example
 ```julia
-check_linear_system(s -> makelinearsystem(zeros(5, 5), s); n = 5, linsolvers = (:auto, :cholesky, :ldl, :qr))
-check_linear_system(s -> maketallsystem(8, 5, s); n = 5, linsolvers = (:auto, :qr))
+check_linear_system(s -> makehessiansystem(zeros(5, 5), s); n = 5, linsolvers = (:auto, :cholesky, :ldl, :qr))
+check_linear_system(s -> makejacobiansystem(8, 5, s); n = 5, linsolvers = (:auto, :qr))
 ```
 """
 function check_linear_system(make_ls; n::Integer, linsolvers, rtol::Real = 1e-8)
