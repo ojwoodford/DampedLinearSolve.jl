@@ -190,7 +190,7 @@ end
 """
     SparseJacobianLinearSystem(J::SparseMatrixCSC{Float64, Int})
 
-The tall linear system of a residual-and-Jacobian problem with a sparse Jacobian prototype: the normal
+The Jacobian linear system of a residual-and-Jacobian problem with a sparse Jacobian prototype: the normal
 equations `(JᵀJ + λD) x = Jᵀr`, with `JᵀJ` never formed. `getA(ls)` is a
 [`SparseJacobianStorage`](@ref) holding `J` (the given matrix, used as storage) and `r`; `getb(ls)`
 is the gradient `Jᵀr`.
@@ -268,7 +268,7 @@ The least-squares solution `x` of `[J; √(λ s)] x = [r; 0]` by SPQR, with `sp`
 the augmented storage in place, and SPQR's numeric factorization, Qᵀb and triangular solve run. Returns
 `NotPositiveDefinite` when the augmented matrix is numerically rank deficient (SPQR's rank estimate below
 `n` at a column-norm tolerance of `max(m + n, n)·eps` times its largest column norm), `Success` otherwise.
-The caller checks that `J` and `r` are finite. Shared by the sparse tall system and the sparse reduced
+The caller checks that `J` and `r` are finite. Shared by the sparse Jacobian system and the sparse reduced
 system of QR elimination.
 """
 function spqr_solve!(x::AbstractVector, sp::SPQRWorkspace, J::SparseMatrixCSC{Float64, Int}, r::AbstractVector, lambda::Float64, scaling)

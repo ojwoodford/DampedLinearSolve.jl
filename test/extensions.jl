@@ -28,7 +28,7 @@ end
 
     @test DampedLinearSolve.validatelinsolver(:cg)
     @test DampedLinearSolve.validatelinsolver(:minres)
-    # M10: LSMR is for a tall system: on the Hessian it would work with H'H, squaring its condition
+    # M10: LSMR is for a Jacobian system: on the Hessian it would work with H'H, squaring its condition
     # number again (test/lsmr.jl)
     @test DampedLinearSolve.validatelinsolver(:lsmr)
     # X2: :krylov was an alias of :cg and is gone; it fails validation like any unknown solver
@@ -220,7 +220,7 @@ end
         @test solve!(ls, static(s)) == Success
         @test getx(ls) ≈ A \ b rtol = 1e-6
     end
-    # A tall system built for QR is not solved by LSMR
+    # A Jacobian system built for QR is not solved by LSMR
     for J in (ones(4, 2), sparse(ones(4, 2)))
         ls = makejacobiansystem(J, 2, :auto)
         @test_throws ArgumentError solve!(ls, static(:lsmr))

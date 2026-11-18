@@ -16,7 +16,7 @@ import DampedLinearSolve: LSMR_ETOL, LSMR_AXTOL, LSMR_BTOL, LSMR_CONLIM
 # Validation of Krylov solver symbols
 validatelinsolver(::StaticSymbol{:cg}) = true
 validatelinsolver(::StaticSymbol{:minres}) = true
-validatelinsolver(::StaticSymbol{:lsmr}) = true   # for a tall system: on the normal equations it would square their condition number again
+validatelinsolver(::StaticSymbol{:lsmr}) = true   # for a Jacobian system: on the normal equations it would square their condition number again
 
 # A Krylov workspace plus storage for a Jacobi (diagonal) preconditioner
 struct JacobiWorkspace{W}
@@ -159,7 +159,7 @@ function solve!(ls::DenseLinearSystem, ::StaticSymbol{:minres})
 end
 
 # ------------------------------------------------------------------------------------------------
-# LSMR on the Jacobian of a tall system (TP2)
+# LSMR on J, for a Jacobian system (TP2)
 #
 # The damped step solves min ‖J x − r‖² + λ Σᵢ sᵢ xᵢ², with λ the optimizer's damping and s the
 # Marquardt scaling (all ones without it). That is LSMR's regularized problem

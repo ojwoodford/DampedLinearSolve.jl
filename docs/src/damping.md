@@ -9,14 +9,14 @@ A system solves `(A + λD) x = b` with the damping set by [`dampen!`](@ref):
 - `dampen!(ls, λ)`: `D = I`, the damping of Levenberg's method;
 - `dampen!(ls, λ, s)`: `D = Diagonal(s)`, with `s` in the units of the diagonal of `A` (not squared).
   With `s` built from the diagonal of `A` this is Marquardt's damping, which makes the step invariant
-  to a rescaling of the variables. [`getdiag!`](@ref) writes the undamped diagonal (for a tall system
+  to a rescaling of the variables. [`getdiag!`](@ref) writes the undamped diagonal (for a Jacobian system
   the squared column norms of `J`) for building `s`.
 
 The rules:
 
 - **Recorded, not applied.** `dampen!` stores `λ` and `s`; only [`solve!`](@ref) applies them, to a
   scratch copy (dense and static systems), to the diagonal with the original restored afterwards
-  (sparse systems), or as extra rows `√λ D^½` of the least-squares problem (tall systems). `A` and `b`
+  (sparse systems), or as extra rows `√λ D^½` of the least-squares problem (Jacobian systems). `A` and `b`
   are left exactly as filled, so the same fill can be solved at many dampings.
 - **Replaced, not accumulated.** Each `dampen!` replaces the damping and scaling set before;
   returning to an earlier damping gives the identical `x`. `λ = 0` is undamped.

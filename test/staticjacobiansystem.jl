@@ -3,7 +3,7 @@ using DampedLinearSolve: dampen!, zero!, Success, NotPositiveDefinite, check_lin
 using DampedLinearSolve: getA, getb, getx, solve!
 const DLS = DampedLinearSolve
 
-# TP4: the static tall system for small problems, against the dense tall system
+# TP4: the static Jacobian system for small problems, against the dense Jacobian system
 
 function tp4_set!(ls, r)
     zero!(ls)
@@ -34,7 +34,7 @@ function tp4_resjac!(r, J, x)
 end
 
 @testset "staticjacobiansystem.jl" begin
-    @testset "Steps equal the dense tall system's: ($m, $n)" for (m, n) in ((8, 3), (3, 3), (12, 1), (2, 5), (6, 6), (24, 2))
+    @testset "Steps equal the dense Jacobian system's: ($m, $n)" for (m, n) in ((8, 3), (3, 3), (12, 1), (2, 5), (6, 6), (24, 2))
         rng = Xoshiro(m + 10n)
         J, r = randn(rng, m, n), randn(rng, m)
         ls, ld = tp4_set!(DLS.StaticJacobianLinearSystem(copy(J)), r), tp4_set!(DLS.DenseJacobianLinearSystem(copy(J)), r)

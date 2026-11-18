@@ -3,12 +3,12 @@ using DampedLinearSolve: dampen!, zero!, copy_structure, Success, NotPositiveDef
 using DampedLinearSolve: getA, getb, getx, solve!   # explicit: Krylov, loaded by other test files, also exports solve!
 const DLS = DampedLinearSolve
 
-# How an optimizer fills a tall system: the linearization writes J and r, then b = Jᵀr is formed and
+# How an optimizer fills a Jacobian system: the linearization writes J and r, then b = Jᵀr is formed and
 # what was computed from the old J and r is invalidated
 include("jacobianfill.jl")
 
-# TP1: the sparse tall system (a SparseMatrixCSC{Float64, Int} Jacobian, solved by SPQR) against
-# the dense tall system on the same J
+# TP1: the sparse Jacobian system (a SparseMatrixCSC{Float64, Int} Jacobian, solved by SPQR) against
+# the dense Jacobian system on the same J
 
 # Both systems set to J and r as a linearization leaves them (b = Jᵀr)
 function tp1_pair(J::SparseMatrixCSC, r)
@@ -53,7 +53,7 @@ function tp1_resjac!(r, J, x)
 end
 
 @testset "sparsejacobiansystem.jl" begin
-    @testset "Steps equal the dense tall system's: ($m, $n)" for (m, n) in ((30, 6), (6, 6), (30, 1), (4, 6))
+    @testset "Steps equal the dense Jacobian system's: ($m, $n)" for (m, n) in ((30, 6), (6, 6), (30, 1), (4, 6))
         rng = Xoshiro(m + 10n)
         J = sprandn(rng, m, n, 0.4) + sparse(1:min(m, n), 1:min(m, n), 1.0, m, n)
         ls, ld = tp1_pair(J, randn(rng, m))

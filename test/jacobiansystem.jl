@@ -3,13 +3,13 @@ using DampedLinearSolve: dampen!, zero!, copy_structure, sharex, quadratic_model
 const DLS = DampedLinearSolve
 using DampedLinearSolve: getA, getb, getx, solve!   # explicit: Krylov, loaded by other test files, also exports solve!
 
-# How an optimizer fills a tall system: the linearization writes J and r, then b = Jᵀr is formed and
+# How an optimizer fills a Jacobian system: the linearization writes J and r, then b = Jᵀr is formed and
 # what was computed from the old J and r is invalidated
 include("jacobianfill.jl")
 
 # J2, J3: DenseJacobianLinearSystem, A = JᵀJ held implicitly, solved by QR of J
 
-# A tall system holding J and r, with b = Jᵀr, ready to solve
+# A Jacobian system holding J and r, with b = Jᵀr, ready to solve
 function jacobian_system(J, r)
     ls = DLS.DenseJacobianLinearSystem(copy(J))
     ls.A.r .= r
@@ -184,7 +184,7 @@ allocations(f::F, args::Vararg{Any, N}) where {F, N} = (f(args...); @allocated f
     end
 
     @testset "J v and Jᵀ r are plain loops that equal mul! to rounding (P4)" begin
-        for (m, n) in ((40, 6), (6, 6), (40, 1), (1, 1), (3, 7))   # tall, square, one column, 1×1, wide
+        for (m, n) in ((40, 6), (6, 6), (40, 1), (1, 1), (3, 7))   # more rows than columns, square, one column, 1×1, wide
             rng = Random.Xoshiro(m + 100n)
             J = randn(rng, m, n); r = randn(rng, m); v = randn(rng, n)
             ls = jacobian_system(J, r)
@@ -298,7 +298,7 @@ end
         @test err isa ArgumentError && occursin(text, err.msg)
     end
 
-    # The prototype's size, and the solvers a tall system accepts
+    # The prototype's size, and the solvers a Jacobian system accepts
     @test jacobian_nrows(4) == 4 && jacobian_nrows(Int32(4)) === 4 && jacobian_nrows(J) == 3
     @test jacobian_ncols(J) == 2 && jacobian_ncols(4) === nothing
     for s in (:auto, :qr, :lsmr)

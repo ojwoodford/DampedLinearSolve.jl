@@ -1,21 +1,21 @@
 # The static residual-and-Jacobian linear system, for small problems (TP4): J an MMatrix{M, N}, r an MVector{M},
-# solved as the dense tall system is (a QR of J once per linearization, then per damping value a QR of the
+# solved as the dense Jacobian system is (a QR of J once per linearization, then per damping value a QR of the
 # stacked [R; √λ D^½]), with StaticArrays' QR. Chosen at construction, without a user option, when the
 # number of variables is static (a `StaticInt`: the caller decides) and M·N is at most MAX_STATIC_JACOBIAN.
 
 """
     MAX_STATIC_JACOBIAN = 48
 
-The largest `m·n` (residuals times variables) for which a tall system with a static number of variables
+The largest `m·n` (residuals times variables) for which a Jacobian system with a static number of variables
 (`n` a `StaticInt`) and a dense Jacobian
-(an integer `m` or a `Matrix` prototype) is a static tall system. A starting value (rules.md 26): measured 2026-11-15 against the dense tall system on
+(an integer `m` or a `Matrix` prototype) is a static Jacobian system. A starting value (rules.md 26): measured 2026-11-15 against the dense Jacobian system on
 Julia 1.10 and 1.13, the static system was faster, per linearization and per retry, at every measured size with
 `m·n ≤ 48` (`n` from 1 to 6), and slower somewhere at every larger `m·n` measured (`n = 8, m = 8` already
 retries 1.26 times slower on 1.10).
 """
 const MAX_STATIC_JACOBIAN = 48
 
-# Whether n variables and an m-residual dense Jacobian get the static tall system: n static, a QR solver,
+# Whether n variables and an m-residual dense Jacobian get the static Jacobian system: n static, a QR solver,
 # and m·n small
 usesstaticjacobian(m::Integer, n, linsolver) = n isa StaticInt && needsqr(linsolver) && m * dynamic(n) <= MAX_STATIC_JACOBIAN
 
@@ -100,7 +100,7 @@ end
 """
     StaticJacobianLinearSystem{M, N, MN, K, KN}
 
-The tall system of [`DenseJacobianLinearSystem`](@ref), with `J` an `MMatrix{M, N}` and the QR factorizations done
+The Jacobian system of [`DenseJacobianLinearSystem`](@ref), with `J` an `MMatrix{M, N}` and the QR factorizations done
 by StaticArrays, for problems with `M·N ≤ MAX_STATIC_JACOBIAN`. Same solves, statuses and damping floor. `R` and
 `q` (`K = min(M, N)` rows) are kept per linearization.
 """

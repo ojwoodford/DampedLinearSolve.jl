@@ -53,7 +53,7 @@ function JacobianQRScratch(m::Integer, n::Integer)
                          Vector{Float64}(undef, lwork), 0)
 end
 
-# The tall systems, dense and sparse: they share the Marquardt scaling (from the squared column
+# The Jacobian systems, dense and sparse: they share the Marquardt scaling (from the squared column
 # norms of J, `colnorms2!`) and the damping floor
 abstract type AbstractJacobianLinearSystem <: AbstractLinearSystem end
 
@@ -187,7 +187,7 @@ end
     DenseJacobianLinearSystem(J::Matrix{Float64})
     DenseJacobianLinearSystem(m::Integer, n::Integer)
 
-The tall linear system of a residual-and-Jacobian problem: the normal equations `(JᵀJ + λD) x = Jᵀr`,
+The Jacobian linear system of a residual-and-Jacobian problem: the normal equations `(JᵀJ + λD) x = Jᵀr`,
 with `J` dense (`m × n`, writing into the given matrix, or its own) and `JᵀJ` never formed.
 It meets the [`AbstractLinearSystem`](@ref) interface with `getA(ls)` a [`JacobianStorage`](@ref)
 holding `J` and `r`, and `getb(ls)` the gradient `Jᵀr`.
@@ -232,7 +232,7 @@ end
 DenseJacobianLinearSystem(m::Integer, n::Integer; linsolver = :auto) = DenseJacobianLinearSystem(zeros(Float64, m, n); linsolver)
 isfinitesystem(ls::DenseJacobianLinearSystem) = all(isfinite, ls.A.J) && all(isfinite, ls.A.r)
 
-# The solvers of the tall systems: QR (`:auto`, `:qr`) in this package, and those an extension
+# The solvers of the Jacobian systems: QR (`:auto`, `:qr`) in this package, and those an extension
 # adds through `makejacobianws` (LSMR, in KrylovExt), which builds the solver's workspace
 needsqr(linsolver) = linsolver_symbol(linsolver) in (:auto, :qr)
 makejacobianws(m, n, linsolver) = makejacobianws(m, n, static(linsolver_symbol(linsolver)))
@@ -247,7 +247,7 @@ const LSMR_AXTOL = sqrt(eps(Float64))
 const LSMR_BTOL = sqrt(eps(Float64))
 const LSMR_CONLIM = 1 / sqrt(eps(Float64))
 
-# The tall system of `n` variables for the Jacobian prototype `J`. A Matrix prototype is the storage
+# The Jacobian system of `n` variables for the Jacobian prototype `J`. A Matrix prototype is the storage
 # resjac! writes into, used with the values it holds: entries resjac! never writes keep the caller's
 # values. With an integer m the matrix starts as zeros. The prototype's type selects the system (a
 # sparse one in sparsejacobiansystem.jl).
@@ -305,7 +305,7 @@ end
 
 # Numerical full rank of the n×n upper triangle stored in the top of the factored `R` (of
 # size(R, 1) rows): the smallest |R[i,i]| must exceed max(rows, n)·eps times the largest. A
-# threshold of n·eps alone misses an exactly duplicated column of a tall J, whose R[i,i] is left
+# threshold of n·eps alone misses an exactly duplicated column of a J with more rows than columns, whose R[i,i] is left
 # at the rounding error of the Householder reflections, which grows with the number of rows.
 function fullrank_upper(R::Matrix{Float64}, n::Integer)
     tol = max(size(R, 1), n) * eps(Float64)
@@ -388,8 +388,8 @@ dampingfloor(ls::AbstractJacobianLinearSystem) = eps(Float64)^2
 # The diagonal of JᵀJ, the squared column norms of J (computed once per linearization)
 getdiag!(d::AbstractVector, ls::AbstractJacobianLinearSystem) = copyto!(d, colnorms2!(ls.A))
 
-# The Jacobian prototypes the tall systems are built from: their checks, size and solvers
-const JACOBIAN_SUPPORT = "A tall system is built from a Matrix{Float64} or SparseMatrixCSC{Float64, Int} Jacobian prototype or an integer number of residuals m, with linsolver = :auto or :qr, or :lsmr with Krylov.jl loaded;" *
+# The Jacobian prototypes the Jacobian systems are built from: their checks, size and solvers
+const JACOBIAN_SUPPORT = "A Jacobian system is built from a Matrix{Float64} or SparseMatrixCSC{Float64, Int} Jacobian prototype or an integer number of residuals m, with linsolver = :auto or :qr, or :lsmr with Krylov.jl loaded;" *
     " a package that implements the linear-system contract for its own prototype adds it (BlockLinearSystems.jl adds SchurBlockJacobian)"
 
 # The Jacobian prototype: a Matrix{Float64} with at least one row, or an integer m >= 1
@@ -418,6 +418,6 @@ jacobian_nrows(J) = J isa Integer ? Int(J) : size(J, 1)
 jacobian_ncols(J::AbstractMatrix) = size(J, 2)
 jacobian_ncols(J) = nothing
 function check_jacobian_linsolver(J, s::Symbol)
-    s in (:auto, :qr, :lsmr) || throw(ArgumentError("linsolver = :$s is not supported by the tall system of a $(typeof(J)) Jacobian prototype. $JACOBIAN_SUPPORT."))
+    s in (:auto, :qr, :lsmr) || throw(ArgumentError("linsolver = :$s is not supported by the Jacobian system of a $(typeof(J)) Jacobian prototype. $JACOBIAN_SUPPORT."))
     return nothing
 end

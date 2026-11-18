@@ -34,7 +34,7 @@ include("utils.jl")
 include("linearsystem.jl")
 include("linearsolver.jl")
 
-# The tall systems, from a Jacobian: dense, sparse and static
+# The Jacobian systems: dense, sparse and static
 include("jacobiansystem.jl")
 include("sparsejacobiansystem.jl")
 include("staticjacobiansystem.jl")

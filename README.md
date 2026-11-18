@@ -20,7 +20,7 @@ getb(ls) .= [1.0, 2.0]                 # the gradient g
 dampen!(ls, 0.5)                       # λ = 0.5, D = I; H itself is not changed
 solve!(ls, :cholesky)                  # Success: getx(ls) == (H + 0.5I) \ g, the step is -getx(ls)
 
-tall = makejacobiansystem(20, 2, :auto)    # 20 residuals, 2 variables: A = JᵀJ never formed
+jac = makejacobiansystem(20, 2, :auto)     # 20 residuals, 2 variables: A = JᵀJ never formed
 ```
 
 The contract every system meets (construction, filling, damping, the solve and its statuses, the
@@ -47,11 +47,11 @@ documented for its version 5.18.3:
   LinearSolve.jl's return codes include `Success` and `Failure`, and document no indefiniteness or
   inertia report.
 - **Queries on the undamped system.** The largest diagonal entry, the diagonal (the squared column
-  norms of `J` on the tall path), the quadratic form `vᵀ A v`, the change in the quadratic model, and
+  norms of `J` on the Jacobian path), the quadratic form `vᵀ A v`, the change in the quadratic model, and
   the smallest damping the solver resolves: what an optimizer needs to set and update `λ` and to
   judge a step. LinearSolve.jl documents no such queries.
-- **Square and tall systems behind one contract.** A normal-equation system and a residual-and-
-  Jacobian system (solved by QR or LSMR on `J`, never forming `JᵀJ`) answer the same calls, so an
+- **Hessian and Jacobian systems behind one contract.** A Hessian system and a Jacobian system
+  (solved by QR or LSMR on `J`, never forming `JᵀJ`) answer the same calls, so an
   optimizer is written once. LinearSolve.jl solves rectangular systems in the least-squares sense,
   by QR, SVD or LSMR, as a different problem from the square one.
 - **A spare system for trial points.** `copy_structure` gives a system of the same structure with its

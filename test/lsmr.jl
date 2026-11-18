@@ -4,7 +4,7 @@ using DampedLinearSolve: dampen!, zero!, Success, NotPositiveDefinite, check_lin
 using DampedLinearSolve: getA, getb, getx, solve!
 const DLS = DampedLinearSolve
 
-# TP2: LSMR on the Jacobian of the dense and sparse tall systems (KrylovExt), against their QR solve
+# TP2: LSMR on the Jacobian of the dense and sparse Jacobian systems (KrylovExt), against their QR solve
 
 function tp2_set!(ls, r)
     zero!(ls)

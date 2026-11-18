@@ -19,7 +19,7 @@ x = (A + λD)^{-1} b, \qquad D = I \text{ or } D = \operatorname{Diagonal}(s).
 An optimizer fills `A` with the Hessian `H` (or its approximation) and `b` with the gradient `g`, so
 that `−x` is the damped Newton step of `(H + λD) Δ = −g`.
 
-A *tall* system holds a Jacobian `J` (`m × n`) and a residual `r` (length `m`) instead, and stands for
+A *Jacobian* system holds a Jacobian `J` (`m × n`) and a residual `r` (length `m`) instead, and stands for
 `A = JᵀJ` and `b = Jᵀr` without forming `JᵀJ`. Its solve is the solution of the damped least-squares
 problem
 
@@ -39,7 +39,7 @@ The system applies the damping it is given; it never chooses it.
   `makehessiansystem(n, linsolver)`: a system of `n` variables with no prototype, static (stack
   allocated, `StaticArrays`) when `n` is a `Static.StaticInt`, dense when it is an `Int`. The caller
   decides between the two by the type of `n`.
-- `makejacobiansystem(J, n, linsolver)`: a tall system built from a Jacobian prototype `J` (a
+- `makejacobiansystem(J, n, linsolver)`: a Jacobian system built from a Jacobian prototype `J` (a
   `Matrix{Float64}`, a `SparseMatrixCSC{Float64, Int}`, or an integer number of residuals `m`) and `n`
   variables. With a static `n`, a dense `J` and a QR solver, the system is static when `m·n` is small.
 - `linsolver` (a `Symbol` or a `Static.StaticSymbol`) is used to preallocate the solver's workspace
@@ -47,7 +47,7 @@ The system applies the damping it is given; it never chooses it.
   it for another is an `ArgumentError`.
 - Before building, the caller may check a prototype: `checkhessian(H, n)` and `checkjacobian(J)` throw
   for a prototype no system accepts, `jacobian_ncols(J)` gives a Jacobian prototype's number of
-  columns (or `nothing`), and `check_jacobian_linsolver(J, linsolver)` throws for a solver the tall
+  columns (or `nothing`), and `check_jacobian_linsolver(J, linsolver)` throws for a solver the Jacobian
   system of `J` does not take. `checklinsolver(linsolver)` throws for a solver name no loaded package
   provides, and `validatelinsolver(linsolver)` says whether one does.
 - `structurekey(P)` is a value that is equal for two prototypes from which systems of the same
@@ -65,7 +65,7 @@ Construction may allocate; nothing after it does (see [Allocation](#Allocation))
   everything computed from the previous fill (a factorization, the column norms).
 - A Hessian system is filled by writing `getA(ls)` and `getb(ls)` (typically adding into them after
   `zero!`).
-- A tall system's storage `A = getA(ls)` holds `getJ(A)` and `getr(A)`, which are *set*, not
+- A Jacobian system's storage `A = getA(ls)` holds `getJ(A)` and `getr(A)`, which are *set*, not
   accumulated: `zero!` does not zero them. After writing them, the caller calls
   `gradient!(getb(ls), A)`, which forms `b = Jᵀr` (and, for a sparse `J`, checks that its pattern is
   the one the system was built for), and `markstale!(A)`, which invalidates the factorization and the
@@ -74,7 +74,7 @@ Construction may allocate; nothing after it does (see [Allocation](#Allocation))
 ## Damping
 
 - `dampen!(ls, λ)` records the damping `λI`; `dampen!(ls, λ, s)` records `λ·Diagonal(s)`, with `s` in
-  the units of the diagonal of `A` (for a tall system, of `JᵀJ`: the squared column norms), not
+  the units of the diagonal of `A` (for a Jacobian system, of `JᵀJ`: the squared column norms), not
   squared. `dampen!(ls, λ, nothing)` is `dampen!(ls, λ)`. Each call replaces the damping set before,
   scaling included, so returning to an earlier damping gives the identical `x`; `λ = 0` is undamped.
 - The damping is applied only inside `solve!`. `A` and `b` are left exactly as they were filled,
@@ -87,7 +87,7 @@ Construction may allocate; nothing after it does (see [Allocation](#Allocation))
 | Status | Meaning |
 |---|---|
 | `Success` | `x` solves the damped system, and is finite. |
-| `NotPositiveDefinite` | The factorization failed or the solution is not finite: the damped matrix is not positive definite, singular to working precision, or not finite. `x` is unspecified (a tall system with a non-finite `J` or `r` sets it to `NaN`). |
+| `NotPositiveDefinite` | The factorization failed or the solution is not finite: the damped matrix is not positive definite, singular to working precision, or not finite. `x` is unspecified (a Jacobian system with a non-finite `J` or `r` sets it to `NaN`). |
 | `Indefinite` | The solve completed, but found the damped matrix indefinite (`:ldl` from its pivots; `:cg` from nonpositive curvature). `x` solves the system (all of it, as for `Success`), but is not a descent direction to rely on. |
 
 An optimizer treats anything but `Success` as a failed solve and raises the damping; a status of
@@ -98,9 +98,9 @@ An optimizer treats anything but `Success` as a failed solve and raises the damp
 These read the system as filled, whatever damping is recorded:
 
 - `max_diag(ls)`: the largest absolute diagonal entry of `A` (`NaN` if a diagonal entry is `NaN`).
-- `getdiag!(d, ls)`: writes the diagonal of `A` into `d` (for a tall system the squared column norms
+- `getdiag!(d, ls)`: writes the diagonal of `A` into `d` (for a Jacobian system the squared column norms
   of `J`) and returns `d`.
-- `quadform(getA(ls), v)`: `vᵀ A v` (for a tall system `‖J v‖²`).
+- `quadform(getA(ls), v)`: `vᵀ A v` (for a Jacobian system `‖J v‖²`).
 - `quadratic_model_change(ls, dx)`: `dxᵀ A dx / 2 + bᵀ dx`, the change in the quadratic model for a
   step `dx`.
 - `dampingfloor(ls)`: the smallest damping the solver resolves, relative to the diagonal: about
@@ -115,7 +115,7 @@ An optimizer that evaluates a trial point keeps a second system and swaps the tw
 accepted:
 
 - `copy_structure(ls)` returns a system of the same structure with its own `A` and `b` (contents
-  unspecified; a tall system's copy starts with the same `J`). It may share `x` and solver workspaces
+  unspecified; a Jacobian system's copy starts with the same `J`). It may share `x` and solver workspaces
   with `ls`, provided each solve is self-contained: filling and solving one never changes the other's
   next solution.
 - `sharex(ls, from)` returns `ls`, or a copy of it sharing its `A` and `b`, whose `x` is `getx(from)`.
@@ -127,8 +127,8 @@ accepted:
 | static (`MMatrix`, `StaticMatrix`, static `n`) | Cholesky | Cholesky | Cholesky, then LU (`Indefinite`) | LU | | | |
 | dense (`Matrix`, `Int` `n`) | Cholesky | Cholesky | Bunch–Kaufman | pivoted QR of `A` | yes | | yes (copies to sparse per solve) |
 | sparse (`SparseMatrixCSC`) | LDLᵀ (LDLFactorizations) | CHOLMOD | LDLᵀ | sparse QR of `A` | yes, Jacobi preconditioned | | yes |
-| tall, dense or static (`Matrix`, `Int` `m`) | QR of `J` | | | QR of `J` | | LSMR on `J` (not static) | |
-| tall, sparse (`SparseMatrixCSC`) | SPQR of `J` | | | SPQR of `J` | | LSMR on `J` | |
+| Jacobian, dense or static (`Matrix`, `Int` `m`) | QR of `J` | | | QR of `J` | | LSMR on `J` (not static) | |
+| Jacobian, sparse (`SparseMatrixCSC`) | SPQR of `J` | | | SPQR of `J` | | LSMR on `J` | |
 
 `:auto` is the default. `validatelinsolver` knows the solver names of the packages loaded.
 

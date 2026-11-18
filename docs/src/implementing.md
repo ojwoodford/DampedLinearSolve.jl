@@ -17,7 +17,7 @@ For a system type `MySystem`:
    [`checkjacobian`](@ref), [`jacobian_ncols`](@ref), [`jacobian_nrows`](@ref),
    [`check_jacobian_linsolver`](@ref)). Add [`structurekey`](@ref) for a prototype that is not a
    matrix, so that a caller caching systems can recognise its structure.
-2. **Filling**: [`getA`](@ref), [`getb`](@ref), [`getx`](@ref) and [`zero!`](@ref); for tall storage
+2. **Filling**: [`getA`](@ref), [`getb`](@ref), [`getx`](@ref) and [`zero!`](@ref); for Jacobian storage
    also [`getJ`](@ref), [`getr`](@ref), [`gradient!`](@ref) and [`markstale!`](@ref).
 3. **Damping and solving**: [`dampen!`](@ref) with both signatures, and [`solve!`](@ref) for each
    solver you accept, returning a [`SolveStatus`](@ref), leaving `A` and `b` as filled.

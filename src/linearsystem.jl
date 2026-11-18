@@ -287,7 +287,7 @@ function getdiag!(d::AbstractVector, ls::SparseLinearSystem)
 end
 
 # The smallest damping the solver resolves, relative to the diagonal: below about eps times the
-# diagonal, Cholesky of A + λD no longer sees the damping. The tall system, solved by QR of J,
+# diagonal, Cholesky of A + λD no longer sees the damping. The Jacobian system, solved by QR of J,
 # tolerates about eps² (see jacobiansystem.jl).
 dampingfloor(ls) = eps(Float64)
 
