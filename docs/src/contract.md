@@ -88,7 +88,7 @@ Construction may allocate; nothing after it does (see [Allocation](#Allocation))
 |---|---|
 | `Success` | `x` solves the damped system, and is finite. |
 | `NotPositiveDefinite` | The factorization failed or the solution is not finite: the damped matrix is not positive definite, singular to working precision, or not finite. `x` is unspecified (a tall system with a non-finite `J` or `r` sets it to `NaN`). |
-| `Indefinite` | The solve completed, but found the damped matrix indefinite (`:ldl` from its pivots; `:cg` from nonpositive curvature). `x` solves the system, but is not a descent direction to rely on. |
+| `Indefinite` | The solve completed, but found the damped matrix indefinite (`:ldl` from its pivots; `:cg` from nonpositive curvature). `x` solves the system (all of it, as for `Success`), but is not a descent direction to rely on. |
 
 An optimizer treats anything but `Success` as a failed solve and raises the damping; a status of
 `Indefinite` lets it tell negative curvature from a factorization that failed.

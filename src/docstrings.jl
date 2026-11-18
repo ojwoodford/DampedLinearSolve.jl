@@ -29,7 +29,8 @@ Enum returned by [`solve!`](@ref):
 - [`NotPositiveDefinite`](@ref): the factorization failed, or the solution is not finite: the damped
   matrix is not positive definite, singular to working precision, or not finite. `x` is unspecified.
 - [`Indefinite`](@ref): the solve completed but found the damped matrix indefinite (`:ldl` from its
-  pivots, `:cg` from nonpositive curvature).
+  pivots, `:cg` from nonpositive curvature). `x` solves the damped system, as for `Success`, but is
+  not a descent direction to rely on.
 """
 SolveStatus
 
@@ -52,7 +53,9 @@ NotPositiveDefinite
     Indefinite
 
 [`SolveStatus`](@ref) indicating that the matrix was found indefinite, or negative curvature was
-encountered, by a solve that completed.
+encountered, by a solve that completed: `x` solves the damped system, but is not a descent direction
+to rely on. An implementation of the contract that returns `Indefinite` must leave the whole of `x`
+solved, not part of it.
 """
 Indefinite
 
