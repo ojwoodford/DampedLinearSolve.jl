@@ -55,9 +55,9 @@ const PUBLIC_API = sort([
     # Internal names stay defined, under the module
     @testset "$name is defined but internal" for name in (
             :StaticLinearSystem, :DenseLinearSystem, :SparseLinearSystem,
-            :DenseTallLinearSystem, :SparseTallLinearSystem, :StaticTallLinearSystem,
-            :AbstractTallLinearSystem, :TallHessian, :SparseTallHessian, :StaticTallHessian,
-            :MAX_STATIC_TALL, :fast_dot, :linsolver_symbol, :uniformscaling!, :invsym)
+            :DenseJacobianLinearSystem, :SparseJacobianLinearSystem, :StaticJacobianLinearSystem,
+            :AbstractJacobianLinearSystem, :JacobianStorage, :SparseJacobianStorage, :StaticJacobianStorage,
+            :MAX_STATIC_JACOBIAN, :fast_dot, :linsolver_symbol, :uniformscaling!, :invsym)
         @test isdefined(DampedLinearSolve, name)
         @test !(name in names(DampedLinearSolve))
     end

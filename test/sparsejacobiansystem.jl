@@ -12,7 +12,7 @@ include("jacobianfill.jl")
 
 # Both systems set to J and r as a linearization leaves them (b = Jᵀr)
 function tp1_pair(J::SparseMatrixCSC, r)
-    ls, ld = DLS.SparseTallLinearSystem(copy(J)), DLS.DenseTallLinearSystem(Matrix(J))
+    ls, ld = DLS.SparseJacobianLinearSystem(copy(J)), DLS.DenseJacobianLinearSystem(Matrix(J))
     for s in (ls, ld)
         zero!(s)
         getA(s).r .= r
@@ -93,7 +93,7 @@ end
     end
 
     @testset "Meets the linear-system interface: ($m, $n)" for (m, n) in ((8, 5), (5, 5), (3, 5), (8, 1))
-        @test isnothing(check_linear_system(s -> DLS.SparseTallLinearSystem(sparse(ones(m, n))); n, linsolvers = (:auto, :qr)))
+        @test isnothing(check_linear_system(s -> DLS.SparseJacobianLinearSystem(sparse(ones(m, n))); n, linsolvers = (:auto, :qr)))
     end
 
 
@@ -107,7 +107,7 @@ end
         @test tp1_bytes(DLS.quadform, getA(ls), v) == 0
         @test tp1_bytes(DLS.jtr!, getb(ls), getA(ls).J, getA(ls).r) == 0
         @test tp1_bytes(DLS.max_diag, getA(ls)) == 0
-        @test tp1_bytes(TallFill(tp1_resjac!), zeros(2), getA(DLS.SparseTallLinearSystem(sparse(ones(20, 2)))), [1.0, 0.0]) == 0
+        @test tp1_bytes(JacobianFill(tp1_resjac!), zeros(2), getA(DLS.SparseJacobianLinearSystem(sparse(ones(20, 2)))), [1.0, 0.0]) == 0
     end
 
 end
@@ -115,7 +115,7 @@ end
 # Paths the solve-level tests moved from SecondOrderOptimization did not reach on their own (rules.md 28)
 @testset "sparsejacobiansystem.jl: the remaining branches" begin
     J = sparse([1.0 0.0; 3.0 4.0; 0.0 6.0])
-    ls = DLS.SparseTallLinearSystem(copy(J))
+    ls = DLS.SparseJacobianLinearSystem(copy(J))
     A = getA(ls)
     @test size(A) == (2, 2) && size(A, 1) == 2 && size(A, 2) == 2
     # isfinitesystem looks at both J's stored values and r

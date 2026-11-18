@@ -228,10 +228,10 @@ end
     # J as an operator for LSMR, and its adjoint
     KExt = Base.get_extension(DampedLinearSolve, :KrylovExt)
     J = [1.0 2.0; 3.0 4.0; 5.0 6.0]
-    op = KExt.TallOperator(J)
+    op = KExt.JacobianOperator(J)
     @test size(op) == (3, 2) && size(op, 1) == 3 && size(op, 2) == 2
     opt = op'
-    @test opt isa KExt.TallOperatorT
+    @test opt isa KExt.JacobianOperatorT
     @test size(opt) == (2, 3) && size(opt, 1) == 2 && size(opt, 2) == 3
     @test eltype(op) == eltype(opt) == Float64
     @test mul!(zeros(3), op, [1.0, -1.0]) ≈ J * [1.0, -1.0]

@@ -61,7 +61,7 @@ conformance_traits(A) = (exact = true, maxrank = typemax(Int), indefinite = true
 # first row of J, so the corresponding diagonal of JᵀJ is non-finite too. Filling writes J and r
 # as resjac! does, and like resjac! it does not mark the factorization stale: the checker fills
 # only fresh systems, or after zero!, so a zero! that left the old factorization in place is caught.
-conformance_matrix(A::TallHessian) = conformance_gram(A.J)
+conformance_matrix(A::JacobianStorage) = conformance_gram(A.J)
 # JᵀJ, summed in row order (as `sqcolnorm` sums), so its diagonal equals the column norms exactly
 function conformance_gram(J::AbstractMatrix)
     n = size(J, 2)
@@ -88,11 +88,11 @@ function conformance_factor(M::AbstractMatrix, m::Integer, n::Integer)
     end
     return J
 end
-function conformance_fill!(A::TallHessian, M::AbstractMatrix)
+function conformance_fill!(A::JacobianStorage, M::AbstractMatrix)
     A.J .= conformance_factor(M, size(A.J)...)
     return A
 end
-function conformance_fillb!(ls::AbstractTallLinearSystem, b::AbstractVector)
+function conformance_fillb!(ls::AbstractJacobianLinearSystem, b::AbstractVector)
     J = Matrix(ls.A.J)
     ls.b .= b
     if all(isfinite, J)
@@ -102,16 +102,16 @@ function conformance_fillb!(ls::AbstractTallLinearSystem, b::AbstractVector)
     end
     return ls
 end
-conformance_traits(A::TallHessian) = (exact = false, maxrank = min(size(A.J)...), indefinite = false, accumulates = false)
+conformance_traits(A::JacobianStorage) = (exact = false, maxrank = min(size(A.J)...), indefinite = false, accumulates = false)
 
 # The sparse tall storage: the same dense factor, written into J's stored entries, so a J that
 # stores every entry holds it exactly
-conformance_matrix(A::SparseTallHessian) = conformance_gram(Matrix(A.J))
-function conformance_fill!(A::SparseTallHessian, M::AbstractMatrix)
+conformance_matrix(A::SparseJacobianStorage) = conformance_gram(Matrix(A.J))
+function conformance_fill!(A::SparseJacobianStorage, M::AbstractMatrix)
     conformance_fill!(A.J, conformance_factor(M, size(A.J)...))
     return A
 end
-conformance_traits(A::SparseTallHessian) = (exact = false, maxrank = min(size(A.J)...), indefinite = false, accumulates = false)
+conformance_traits(A::SparseJacobianStorage) = (exact = false, maxrank = min(size(A.J)...), indefinite = false, accumulates = false)
 
 # Deterministic test data, so the checker needs no random number generator
 conformance_symmetric(n) = [sin(1.7 * (i + j) + 0.3 * i * j) for i in 1:n, j in 1:n]
