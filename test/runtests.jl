@@ -9,9 +9,9 @@ using Test
     include("utils.jl")
     include("linearsolve.jl")
     include("conformance.jl")
-    include("tallsystem.jl")
-    include("sparsetallsystem.jl")
-    include("statictallsystem.jl")
+    include("jacobiansystem.jl")
+    include("sparsejacobiansystem.jl")
+    include("staticjacobiansystem.jl")
     include("extensions.jl")
     include("lsmr.jl")
 end

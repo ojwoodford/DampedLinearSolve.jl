@@ -53,12 +53,12 @@ julia> max_diag(ls)
 2.5
 ```
 
-## A tall system
+## A Jacobian system
 
-A tall system holds `J` and `r`; the caller writes them, forms `b = Jᵀr` with [`gradient!`](@ref),
+A Jacobian system holds `J` and `r`; the caller writes them, forms `b = Jᵀr` with [`gradient!`](@ref),
 and marks the old factorization stale with [`markstale!`](@ref).
 
-```jldoctest tall
+```jldoctest jacobian
 julia> J = [1.0 0.0; 1.0 1.0; 1.0 2.0; 1.0 3.0]; r = [1.0, 2.0, 2.0, 4.0];
 
 julia> ls = makejacobiansystem(4, 2, :auto); A = getA(ls);

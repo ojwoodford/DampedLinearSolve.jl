@@ -29,7 +29,7 @@ end
 
 Write the right-hand side `b` into the linear system `ls`, after its Hessian storage has been
 filled with [`conformance_fill!`](@ref). The default sets `getb(ls) .= b`; a system whose `b` is
-derived from other storage (as `b = Jᵀr` for a tall system) needs a method
+derived from other storage (as `b = Jᵀr` for a Jacobian system) needs a method
 that also fills that storage. Used by [`check_linear_system`](@ref).
 """
 conformance_fillb!(ls, b::AbstractVector) = (getb(ls) .= b; ls)
@@ -56,12 +56,12 @@ fits every square storage. A method returning a tuple without `accumulates` coun
 """
 conformance_traits(A) = (exact = true, maxrank = typemax(Int), indefinite = true, accumulates = true)
 
-# The tall storage: A = JᵀJ. Filling factors M (its largest min(m, n) eigenpairs) into J through
+# The Jacobian storage: A = JᵀJ. Filling factors M (its largest min(m, n) eigenpairs) into J through
 # a fixed orthonormal basis, so J is dense; a non-finite diagonal entry of M is written into the
 # first row of J, so the corresponding diagonal of JᵀJ is non-finite too. Filling writes J and r
 # as resjac! does, and like resjac! it does not mark the factorization stale: the checker fills
 # only fresh systems, or after zero!, so a zero! that left the old factorization in place is caught.
-conformance_matrix(A::TallHessian) = conformance_gram(A.J)
+conformance_matrix(A::JacobianStorage) = conformance_gram(A.J)
 # JᵀJ, summed in row order (as `sqcolnorm` sums), so its diagonal equals the column norms exactly
 function conformance_gram(J::AbstractMatrix)
     n = size(J, 2)
@@ -88,11 +88,11 @@ function conformance_factor(M::AbstractMatrix, m::Integer, n::Integer)
     end
     return J
 end
-function conformance_fill!(A::TallHessian, M::AbstractMatrix)
+function conformance_fill!(A::JacobianStorage, M::AbstractMatrix)
     A.J .= conformance_factor(M, size(A.J)...)
     return A
 end
-function conformance_fillb!(ls::AbstractTallLinearSystem, b::AbstractVector)
+function conformance_fillb!(ls::AbstractJacobianLinearSystem, b::AbstractVector)
     J = Matrix(ls.A.J)
     ls.b .= b
     if all(isfinite, J)
@@ -102,16 +102,16 @@ function conformance_fillb!(ls::AbstractTallLinearSystem, b::AbstractVector)
     end
     return ls
 end
-conformance_traits(A::TallHessian) = (exact = false, maxrank = min(size(A.J)...), indefinite = false, accumulates = false)
+conformance_traits(A::JacobianStorage) = (exact = false, maxrank = min(size(A.J)...), indefinite = false, accumulates = false)
 
-# The sparse tall storage: the same dense factor, written into J's stored entries, so a J that
+# The sparse Jacobian storage: the same dense factor, written into J's stored entries, so a J that
 # stores every entry holds it exactly
-conformance_matrix(A::SparseTallHessian) = conformance_gram(Matrix(A.J))
-function conformance_fill!(A::SparseTallHessian, M::AbstractMatrix)
+conformance_matrix(A::SparseJacobianStorage) = conformance_gram(Matrix(A.J))
+function conformance_fill!(A::SparseJacobianStorage, M::AbstractMatrix)
     conformance_fill!(A.J, conformance_factor(M, size(A.J)...))
     return A
 end
-conformance_traits(A::SparseTallHessian) = (exact = false, maxrank = min(size(A.J)...), indefinite = false, accumulates = false)
+conformance_traits(A::SparseJacobianStorage) = (exact = false, maxrank = min(size(A.J)...), indefinite = false, accumulates = false)
 
 # Deterministic test data, so the checker needs no random number generator
 conformance_symmetric(n) = [sin(1.7 * (i + j) + 0.3 * i * j) for i in 1:n, j in 1:n]
@@ -154,9 +154,9 @@ dimension `n` whose Hessian storage can hold a dense symmetric matrix wherever i
 The test matrices are built inside that pattern and made diagonally dominant, so they are
 positive definite. Reading and writing the storage uses [`conformance_matrix`](@ref),
 [`conformance_fill!`](@ref) and [`conformance_fillb!`](@ref), which have methods for `Matrix`,
-`MMatrix`, `SparseMatrixCSC` and the storage of the tall systems (and, from a package that implements
+`MMatrix`, `SparseMatrixCSC` and the storage of the Jacobian systems (and, from a package that implements
 the contract, its own storage); [`conformance_traits`](@ref) says what the storage
-can represent. For the tall storage, `JᵀJ` is compared with the test matrix to a relative `1e-10`
+can represent. For the Jacobian storage, `JᵀJ` is compared with the test matrix to a relative `1e-10`
 (then exactly with itself), the indefinite-`A` checks are skipped, and when `m < n` the test
 matrix has rank `m`, the undamped solve must not return `Success`, and the solves that are
 otherwise undamped use a damping of `0.25`. Solutions are compared with `rtol`; use a looser
@@ -208,7 +208,7 @@ function check_linear_system_solver(make_ls, n, s, rtol)
     size(P) == (n, n) || conformance_error("getA is n×n", s, "got $(size(P)), n = $n")
     deficient = traits.maxrank < n
     if deficient
-        # Storage of limited rank (a tall system with fewer rows than columns): a dense positive
+        # Storage of limited rank (a Jacobian system with fewer rows than columns): a dense positive
         # semidefinite matrix of that rank, and right-hand sides in its range
         C = [cos(0.7 * i + 1.9 * j + 0.1 * i * j) + (i == j ? 3.0 : 0.0) for i in 1:traits.maxrank, j in 1:n]
         Q = C' * C

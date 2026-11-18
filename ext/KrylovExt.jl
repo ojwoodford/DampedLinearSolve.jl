@@ -10,13 +10,13 @@ import DampedLinearSolve: validatelinsolver, makesparsews, makedensews, solve!
 import DampedLinearSolve: AbstractLinearSystem, SparseLinearSystem, DenseLinearSystem
 import DampedLinearSolve: SolveStatus, Success, NotPositiveDefinite, Indefinite
 import DampedLinearSolve: uniformscaling!, damp_marquardt!, builtfor, solvermismatch
-import DampedLinearSolve: DenseTallLinearSystem, SparseTallLinearSystem, maketallws, jmul!, jtr!
+import DampedLinearSolve: DenseJacobianLinearSystem, SparseJacobianLinearSystem, makejacobianws, jmul!, jtr!
 import DampedLinearSolve: LSMR_ETOL, LSMR_AXTOL, LSMR_BTOL, LSMR_CONLIM
 
 # Validation of Krylov solver symbols
 validatelinsolver(::StaticSymbol{:cg}) = true
 validatelinsolver(::StaticSymbol{:minres}) = true
-validatelinsolver(::StaticSymbol{:lsmr}) = true   # for a tall system: on the normal equations it would square their condition number again
+validatelinsolver(::StaticSymbol{:lsmr}) = true   # for a Jacobian system: on the normal equations it would square their condition number again
 
 # A Krylov workspace plus storage for a Jacobi (diagonal) preconditioner
 struct JacobiWorkspace{W}
@@ -159,7 +159,7 @@ function solve!(ls::DenseLinearSystem, ::StaticSymbol{:minres})
 end
 
 # ------------------------------------------------------------------------------------------------
-# LSMR on the Jacobian of a tall system (TP2)
+# LSMR on J, for a Jacobian system (TP2)
 #
 # The damped step solves min ‖J x − r‖² + λ Σᵢ sᵢ xᵢ², with λ the optimizer's damping and s the
 # Marquardt scaling (all ones without it). That is LSMR's regularized problem
@@ -167,34 +167,34 @@ end
 # preconditioner N = F⁻¹. Nothing is augmented and JᵀJ is never formed. J's products are this
 # package's plain loops (`jmul!`, `jtr!`), not BLAS (rules.md 23).
 
-# The tolerances (LSMR_ETOL and the rest, in tallsystem.jl) are starting values, not measured.
+# The tolerances (LSMR_ETOL and the rest, in jacobiansystem.jl) are starting values, not measured.
 
-struct TallLsmrWorkspace{W}
+struct JacobianLsmrWorkspace{W}
     ws::W
     invscale::Vector{Float64}     # N = F⁻¹, the inverse of the Marquardt scaling
 end
-maketallws(m, n, ::StaticSymbol{:lsmr}) = TallLsmrWorkspace(Krylov.LsmrWorkspace(m, n, Vector{Float64}), Vector{Float64}(undef, n))
-builtfor(::TallLsmrWorkspace) = ":lsmr"
+makejacobianws(m, n, ::StaticSymbol{:lsmr}) = JacobianLsmrWorkspace(Krylov.LsmrWorkspace(m, n, Vector{Float64}), Vector{Float64}(undef, n))
+builtfor(::JacobianLsmrWorkspace) = ":lsmr"
 
 # J as an operator, and its adjoint, for Krylov
-struct TallOperator{M}
+struct JacobianOperator{M}
     J::M
 end
-struct TallOperatorT{M}
+struct JacobianOperatorT{M}
     J::M
 end
-Base.size(A::TallOperator) = size(A.J)
-Base.size(A::TallOperator, d::Integer) = size(A.J, d)
-Base.size(A::TallOperatorT) = reverse(size(A.J))
-Base.size(A::TallOperatorT, d::Integer) = size(A)[d]
-Base.eltype(::Union{TallOperator, TallOperatorT}) = Float64
-Base.adjoint(A::TallOperator) = TallOperatorT(A.J)
-LinearAlgebra.mul!(y::AbstractVector, A::TallOperator, v::AbstractVector) = jmul!(y, A.J, v)
-LinearAlgebra.mul!(y::AbstractVector, A::TallOperatorT, w::AbstractVector) = jtr!(y, A.J, w)
+Base.size(A::JacobianOperator) = size(A.J)
+Base.size(A::JacobianOperator, d::Integer) = size(A.J, d)
+Base.size(A::JacobianOperatorT) = reverse(size(A.J))
+Base.size(A::JacobianOperatorT, d::Integer) = size(A)[d]
+Base.eltype(::Union{JacobianOperator, JacobianOperatorT}) = Float64
+Base.adjoint(A::JacobianOperator) = JacobianOperatorT(A.J)
+LinearAlgebra.mul!(y::AbstractVector, A::JacobianOperator, v::AbstractVector) = jmul!(y, A.J, v)
+LinearAlgebra.mul!(y::AbstractVector, A::JacobianOperatorT, w::AbstractVector) = jtr!(y, A.J, w)
 
-const LsmrTallSystem = Union{DenseTallLinearSystem{<:TallLsmrWorkspace}, SparseTallLinearSystem{<:TallLsmrWorkspace}}
+const LsmrJacobianSystem = Union{DenseJacobianLinearSystem{<:JacobianLsmrWorkspace}, SparseJacobianLinearSystem{<:JacobianLsmrWorkspace}}
 
-function solve!(ls::LsmrTallSystem, ::StaticSymbol{:lsmr})
+function solve!(ls::LsmrJacobianSystem, ::StaticSymbol{:lsmr})
     A = ls.A
     J, r = A.J, A.r
     m, n = size(J)
@@ -209,7 +209,7 @@ function solve!(ls::LsmrTallSystem, ::StaticSymbol{:lsmr})
     # does. (LSMR cannot detect numerical rank deficiency with m ≥ n; it returns a least-squares
     # solution there.)
     lambda == 0 && m < n && return NotPositiveDefinite
-    op = TallOperator(J)
+    op = JacobianOperator(J)
     if lambda > 0 && !isnothing(ls.scaling)
         @inbounds for i in 1:n
             lw.invscale[i] = inv(ls.scaling[i])
@@ -225,7 +225,7 @@ function solve!(ls::LsmrTallSystem, ::StaticSymbol{:lsmr})
     copyto!(ls.x, x)
     return Success
 end
-solve!(ls::DenseTallLinearSystem, ::StaticSymbol{:lsmr}) = solvermismatch(ls, :lsmr)
-solve!(ls::SparseTallLinearSystem, ::StaticSymbol{:lsmr}) = solvermismatch(ls, :lsmr)
+solve!(ls::DenseJacobianLinearSystem, ::StaticSymbol{:lsmr}) = solvermismatch(ls, :lsmr)
+solve!(ls::SparseJacobianLinearSystem, ::StaticSymbol{:lsmr}) = solvermismatch(ls, :lsmr)
 
 end # module KrylovExt

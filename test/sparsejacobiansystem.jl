@@ -3,16 +3,16 @@ using DampedLinearSolve: dampen!, zero!, copy_structure, Success, NotPositiveDef
 using DampedLinearSolve: getA, getb, getx, solve!   # explicit: Krylov, loaded by other test files, also exports solve!
 const DLS = DampedLinearSolve
 
-# How an optimizer fills a tall system: the linearization writes J and r, then b = Jᵀr is formed and
+# How an optimizer fills a Jacobian system: the linearization writes J and r, then b = Jᵀr is formed and
 # what was computed from the old J and r is invalidated
-include("tallfill.jl")
+include("jacobianfill.jl")
 
-# TP1: the sparse tall system (a SparseMatrixCSC{Float64, Int} Jacobian, solved by SPQR) against
-# the dense tall system on the same J
+# TP1: the sparse Jacobian system (a SparseMatrixCSC{Float64, Int} Jacobian, solved by SPQR) against
+# the dense Jacobian system on the same J
 
 # Both systems set to J and r as a linearization leaves them (b = Jᵀr)
 function tp1_pair(J::SparseMatrixCSC, r)
-    ls, ld = DLS.SparseTallLinearSystem(copy(J)), DLS.DenseTallLinearSystem(Matrix(J))
+    ls, ld = DLS.SparseJacobianLinearSystem(copy(J)), DLS.DenseJacobianLinearSystem(Matrix(J))
     for s in (ls, ld)
         zero!(s)
         getA(s).r .= r
@@ -52,8 +52,8 @@ function tp1_resjac!(r, J, x)
     return tp1_cost(x)
 end
 
-@testset "sparsetallsystem.jl" begin
-    @testset "Steps equal the dense tall system's: ($m, $n)" for (m, n) in ((30, 6), (6, 6), (30, 1), (4, 6))
+@testset "sparsejacobiansystem.jl" begin
+    @testset "Steps equal the dense Jacobian system's: ($m, $n)" for (m, n) in ((30, 6), (6, 6), (30, 1), (4, 6))
         rng = Xoshiro(m + 10n)
         J = sprandn(rng, m, n, 0.4) + sparse(1:min(m, n), 1:min(m, n), 1.0, m, n)
         ls, ld = tp1_pair(J, randn(rng, m))
@@ -93,7 +93,7 @@ end
     end
 
     @testset "Meets the linear-system interface: ($m, $n)" for (m, n) in ((8, 5), (5, 5), (3, 5), (8, 1))
-        @test isnothing(check_linear_system(s -> DLS.SparseTallLinearSystem(sparse(ones(m, n))); n, linsolvers = (:auto, :qr)))
+        @test isnothing(check_linear_system(s -> DLS.SparseJacobianLinearSystem(sparse(ones(m, n))); n, linsolvers = (:auto, :qr)))
     end
 
 
@@ -107,15 +107,15 @@ end
         @test tp1_bytes(DLS.quadform, getA(ls), v) == 0
         @test tp1_bytes(DLS.jtr!, getb(ls), getA(ls).J, getA(ls).r) == 0
         @test tp1_bytes(DLS.max_diag, getA(ls)) == 0
-        @test tp1_bytes(TallFill(tp1_resjac!), zeros(2), getA(DLS.SparseTallLinearSystem(sparse(ones(20, 2)))), [1.0, 0.0]) == 0
+        @test tp1_bytes(JacobianFill(tp1_resjac!), zeros(2), getA(DLS.SparseJacobianLinearSystem(sparse(ones(20, 2)))), [1.0, 0.0]) == 0
     end
 
 end
 
 # Paths the solve-level tests moved from SecondOrderOptimization did not reach on their own (rules.md 28)
-@testset "sparsetallsystem.jl: the remaining branches" begin
+@testset "sparsejacobiansystem.jl: the remaining branches" begin
     J = sparse([1.0 0.0; 3.0 4.0; 0.0 6.0])
-    ls = DLS.SparseTallLinearSystem(copy(J))
+    ls = DLS.SparseJacobianLinearSystem(copy(J))
     A = getA(ls)
     @test size(A) == (2, 2) && size(A, 1) == 2 && size(A, 2) == 2
     # isfinitesystem looks at both J's stored values and r

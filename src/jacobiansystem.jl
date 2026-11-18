@@ -38,7 +38,7 @@ end
 # and their LAPACK arrays. A system and its `copy_structure` copy share one: only one of them
 # has a live factorization at a time (the trial system is not solved until it becomes the main
 # one). `owner` is the token of the system whose factorization the scratch holds (0: none).
-mutable struct TallQRScratch
+mutable struct JacobianQRScratch
     const Jr::Matrix{Float64}     # m × (n+1): [J r], factored in place; R and q = (Qᵀr)[1:k] on top
     const tau::Vector{Float64}
     const S::Matrix{Float64}      # 2n × (n+1): [R q; √λ D^½ 0], factored in place per damping
@@ -46,18 +46,18 @@ mutable struct TallQRScratch
     const work::Vector{Float64}
     owner::Int
 end
-function TallQRScratch(m::Integer, n::Integer)
+function JacobianQRScratch(m::Integer, n::Integer)
     lwork = max(geqrf_worksize(m, n + 1), geqrf_worksize(2n, n + 1))
-    return TallQRScratch(Matrix{Float64}(undef, m, n + 1), Vector{Float64}(undef, min(m, n + 1)),
+    return JacobianQRScratch(Matrix{Float64}(undef, m, n + 1), Vector{Float64}(undef, min(m, n + 1)),
                          Matrix{Float64}(undef, 2n, n + 1), Vector{Float64}(undef, min(2n, n + 1)),
                          Vector{Float64}(undef, lwork), 0)
 end
 
-# The tall systems, dense and sparse: they share the Marquardt scaling (from the squared column
+# The Jacobian systems, dense and sparse: they share the Marquardt scaling (from the squared column
 # norms of J, `colnorms2!`) and the damping floor
-abstract type AbstractTallLinearSystem <: AbstractLinearSystem end
+abstract type AbstractJacobianLinearSystem <: AbstractLinearSystem end
 
-const TALL_TOKENS = Threads.Atomic{Int}(0)
+const JACOBIAN_TOKENS = Threads.Atomic{Int}(0)
 
 # The state of one system's linearization: whether its factorization and the squared column norms
 # of J (the diagonal of JᵀJ) are current. `stale` and `normsstale` are both set, through
@@ -65,8 +65,8 @@ const TALL_TOKENS = Threads.Atomic{Int}(0)
 # the QR clears `stale`, and computing the column norms clears `normsstale`. The factorization
 # itself is in the (possibly shared) scratch, and is this system's only while the scratch's owner
 # is this system's token: a solve refactors otherwise.
-mutable struct TallQRWorkspace
-    const scratch::TallQRScratch
+mutable struct JacobianQRWorkspace
+    const scratch::JacobianQRScratch
     const token::Int
     const colnorm2::Vector{Float64}   # n: squared column norms of J, the diagonal of JᵀJ
     stale::Bool
@@ -75,34 +75,34 @@ mutable struct TallQRWorkspace
     nfactor::Int                  # number of QR factorizations of [J r], for tests
     nnorms::Int                   # number of column-norm computations, for tests
 end
-TallQRWorkspace(scratch::TallQRScratch, n::Integer) =
-    TallQRWorkspace(scratch, Threads.atomic_add!(TALL_TOKENS, 1) + 1, Vector{Float64}(undef, n), true, true, false, 0, 0)
-TallQRWorkspace(m::Integer, n::Integer) = TallQRWorkspace(TallQRScratch(m, n), n)
+JacobianQRWorkspace(scratch::JacobianQRScratch, n::Integer) =
+    JacobianQRWorkspace(scratch, Threads.atomic_add!(JACOBIAN_TOKENS, 1) + 1, Vector{Float64}(undef, n), true, true, false, 0, 0)
+JacobianQRWorkspace(m::Integer, n::Integer) = JacobianQRWorkspace(JacobianQRScratch(m, n), n)
 # Whether the scratch holds this system's current factorization
-factorized(ws::TallQRWorkspace) = !ws.stale && ws.scratch.owner == ws.token
+factorized(ws::JacobianQRWorkspace) = !ws.stale && ws.scratch.owner == ws.token
 
 """
-    TallHessian
+    JacobianStorage
 
-The Hessian storage of a [`DenseTallLinearSystem`](@ref): the Jacobian `J` (`m × n`) and the
+The Hessian storage of a [`DenseJacobianLinearSystem`](@ref): the Jacobian `J` (`m × n`) and the
 residual `r` (length `m`), standing for `A = JᵀJ`, which is never formed.
 `quadform(A, v)` is `‖J v‖²`, and the diagonal of `A` is the squared column norms of `J`.
 """
-struct TallHessian
+struct JacobianStorage
     J::Matrix{Float64}
     r::Vector{Float64}
     Jv::Vector{Float64}           # scratch for quadform
-    ws::TallQRWorkspace
+    ws::JacobianQRWorkspace
 end
-TallHessian(J::Matrix{Float64}) = TallHessian(J, zeros(size(J, 1)), zeros(size(J, 1)), TallQRWorkspace(size(J)...))
+JacobianStorage(J::Matrix{Float64}) = JacobianStorage(J, zeros(size(J, 1)), zeros(size(J, 1)), JacobianQRWorkspace(size(J)...))
 
-Base.size(A::TallHessian) = (size(A.J, 2), size(A.J, 2))
-Base.size(A::TallHessian, d::Integer) = size(A)[d]
-markstale!(A::TallHessian) = (A.ws.stale = true; A.ws.normsstale = true; A)
+Base.size(A::JacobianStorage) = (size(A.J, 2), size(A.J, 2))
+Base.size(A::JacobianStorage, d::Integer) = size(A)[d]
+markstale!(A::JacobianStorage) = (A.ws.stale = true; A.ws.normsstale = true; A)
 # The storage the linearization writes, J and r, and the gradient Jᵀr it then forms
-getJ(A::TallHessian) = A.J
-getr(A::TallHessian) = A.r
-gradient!(g::AbstractVector, A::TallHessian) = jtr!(g, A.J, A.r)
+getJ(A::JacobianStorage) = A.J
+getr(A::JacobianStorage) = A.r
+gradient!(g::AbstractVector, A::JacobianStorage) = jtr!(g, A.J, A.r)
 
 # y = J v, one scaled column at a time: a plain loop, not BLAS gemv, so that per-cost work stays
 # single-threaded (rules.md 23). The first column is written, not added, so y needs no zeroing.
@@ -128,7 +128,7 @@ function jmul!(y::AbstractVector, J::Matrix{Float64}, v::AbstractVector)
 end
 
 # ‖J v‖², with J v formed into the scratch `Jv`
-function quadform(A::TallHessian, v::AbstractVector)
+function quadform(A::JacobianStorage, v::AbstractVector)
     size(A.J, 2) == 0 && return 0.0
     Jv = jmul!(A.Jv, A.J, v)
     total = 0.0
@@ -162,7 +162,7 @@ end
 
 # The squared column norms of J, the diagonal of JᵀJ: computed once per linearization and shared
 # by `max_diag` and the Marquardt scaling
-function colnorms2!(A::TallHessian)
+function colnorms2!(A::JacobianStorage)
     ws = A.ws
     if ws.normsstale
         @inbounds for j in axes(A.J, 2)
@@ -175,7 +175,7 @@ function colnorms2!(A::TallHessian)
 end
 
 # The largest squared column norm; NaN if any is NaN (`max` propagates NaN)
-function max_diag(A::TallHessian)
+function max_diag(A::JacobianStorage)
     md = 0.0
     for d in colnorms2!(A)
         md = max(md, d)
@@ -184,12 +184,12 @@ function max_diag(A::TallHessian)
 end
 
 """
-    DenseTallLinearSystem(J::Matrix{Float64})
-    DenseTallLinearSystem(m::Integer, n::Integer)
+    DenseJacobianLinearSystem(J::Matrix{Float64})
+    DenseJacobianLinearSystem(m::Integer, n::Integer)
 
-The tall linear system of a residual-and-Jacobian problem: the normal equations `(JᵀJ + λD) x = Jᵀr`,
+The Jacobian linear system of a residual-and-Jacobian problem: the normal equations `(JᵀJ + λD) x = Jᵀr`,
 with `J` dense (`m × n`, writing into the given matrix, or its own) and `JᵀJ` never formed.
-It meets the [`AbstractLinearSystem`](@ref) interface with `getA(ls)` a [`TallHessian`](@ref)
+It meets the [`AbstractLinearSystem`](@ref) interface with `getA(ls)` a [`JacobianStorage`](@ref)
 holding `J` and `r`, and `getb(ls)` the gradient `Jᵀr`.
 
 `solve!(ls, :auto)` (or `:qr`) factors `[J r]` by Householder QR once per linearization
@@ -210,33 +210,33 @@ column norms (and zeroes `b`, which the linearization then overwrites). Code tha
 `getJ(getA(ls))` or `getr(getA(ls))` must call `zero!` (before or after writing), or
 `markstale!(getA(ls))`.
 
-`DenseTallLinearSystem(J)` uses `J` as its storage with the values it holds, as does
+`DenseJacobianLinearSystem(J)` uses `J` as its storage with the values it holds, as does
 `makejacobiansystem` with a `Matrix` prototype; with an integer `m`, `J` starts as zeros.
 `copy_structure` copies `J`, so a trial system starts with the same entries.
 """
-mutable struct DenseTallLinearSystem{W} <: AbstractTallLinearSystem
-    const A::TallHessian
+mutable struct DenseJacobianLinearSystem{W} <: AbstractJacobianLinearSystem
+    const A::JacobianStorage
     const b::Vector{Float64}      # the gradient Jᵀr
     const x::Vector{Float64}
-    const solver_ws::W            # an iterative solver's workspace (`maketallws`), or nothing for QR
+    const solver_ws::W            # an iterative solver's workspace (`makejacobianws`), or nothing for QR
     lambda::Float64
     scaling::Union{Nothing, Vector{Float64}}
 end
-function DenseTallLinearSystem(J::Matrix{Float64}; linsolver = :auto)
+function DenseJacobianLinearSystem(J::Matrix{Float64}; linsolver = :auto)
     m, n = size(J)
     # An iterative solver needs no QR scratch, only its own workspace
-    scratch = needsqr(linsolver) ? TallQRScratch(m, n) : TallQRScratch(0, n)
-    A = TallHessian(J, zeros(m), zeros(m), TallQRWorkspace(scratch, n))
-    return DenseTallLinearSystem(A, zeros(n), zeros(n), maketallws(m, n, linsolver), 0.0, nothing)
+    scratch = needsqr(linsolver) ? JacobianQRScratch(m, n) : JacobianQRScratch(0, n)
+    A = JacobianStorage(J, zeros(m), zeros(m), JacobianQRWorkspace(scratch, n))
+    return DenseJacobianLinearSystem(A, zeros(n), zeros(n), makejacobianws(m, n, linsolver), 0.0, nothing)
 end
-DenseTallLinearSystem(m::Integer, n::Integer; linsolver = :auto) = DenseTallLinearSystem(zeros(Float64, m, n); linsolver)
-isfinitesystem(ls::DenseTallLinearSystem) = all(isfinite, ls.A.J) && all(isfinite, ls.A.r)
+DenseJacobianLinearSystem(m::Integer, n::Integer; linsolver = :auto) = DenseJacobianLinearSystem(zeros(Float64, m, n); linsolver)
+isfinitesystem(ls::DenseJacobianLinearSystem) = all(isfinite, ls.A.J) && all(isfinite, ls.A.r)
 
-# The solvers of the tall systems: QR (`:auto`, `:qr`) in this package, and those an extension
-# adds through `maketallws` (LSMR, in KrylovExt), which builds the solver's workspace
+# The solvers of the Jacobian systems: QR (`:auto`, `:qr`) in this package, and those an extension
+# adds through `makejacobianws` (LSMR, in KrylovExt), which builds the solver's workspace
 needsqr(linsolver) = linsolver_symbol(linsolver) in (:auto, :qr)
-maketallws(m, n, linsolver) = maketallws(m, n, static(linsolver_symbol(linsolver)))
-maketallws(m, n, ::StaticSymbol) = nothing
+makejacobianws(m, n, linsolver) = makejacobianws(m, n, static(linsolver_symbol(linsolver)))
+makejacobianws(m, n, ::StaticSymbol) = nothing
 
 # LSMR's stopping tolerances, for LSMR on J (KrylovExt). Starting values, not measured (rules.md 26;
 # improvements.md item 5):
@@ -247,27 +247,27 @@ const LSMR_AXTOL = sqrt(eps(Float64))
 const LSMR_BTOL = sqrt(eps(Float64))
 const LSMR_CONLIM = 1 / sqrt(eps(Float64))
 
-# The tall system of `n` variables for the Jacobian prototype `J`. A Matrix prototype is the storage
+# The Jacobian system of `n` variables for the Jacobian prototype `J`. A Matrix prototype is the storage
 # resjac! writes into, used with the values it holds: entries resjac! never writes keep the caller's
 # values. With an integer m the matrix starts as zeros. The prototype's type selects the system (a
-# sparse one in sparsetallsystem.jl).
+# sparse one in sparsejacobiansystem.jl).
 # A small problem with a static number of variables (`n` a `StaticInt`) gets the static system
-# (statictallsystem.jl). The choice depends on m, known only at run time, so it is made here, once,
+# (staticjacobiansystem.jl). The choice depends on m, known only at run time, so it is made here, once,
 # when the system is built.
 function makejacobiansystem(m::Integer, n, linsolver)
-    usesstatictall(m, n, linsolver) && return StaticTallLinearSystem(zeros(MMatrix{Int(m), dynamic(n), Float64}))
-    return DenseTallLinearSystem(m, dynamic(n); linsolver)
+    usesstaticjacobian(m, n, linsolver) && return StaticJacobianLinearSystem(zeros(MMatrix{Int(m), dynamic(n), Float64}))
+    return DenseJacobianLinearSystem(m, dynamic(n); linsolver)
 end
 function makejacobiansystem(J::Matrix{Float64}, n, linsolver)
-    usesstatictall(size(J, 1), n, linsolver) && return StaticTallLinearSystem(J)
-    return DenseTallLinearSystem(J; linsolver)
+    usesstaticjacobian(size(J, 1), n, linsolver) && return StaticJacobianLinearSystem(J)
+    return DenseJacobianLinearSystem(J; linsolver)
 end
 
 # resjac! sets every entry of r and every entry of J that can be non-zero, so a fresh
 # linearization needs no zeroing: only the cached factorization and column norms are invalidated.
 # b is zeroed (n entries) so that zero! leaves the system as the interface describes; the
 # linearization wrapper overwrites it.
-function zero!(ls::DenseTallLinearSystem)
+function zero!(ls::DenseJacobianLinearSystem)
     fill!(ls.b, 0.0)
     markstale!(ls.A)
     return ls
@@ -276,17 +276,17 @@ end
 # The trial system starts from the same J (its unwritten entries must match the main system's),
 # and shares the factorization scratch: its own J, r, b, stale flags and column norms, so it costs
 # one more J, not two
-function copy_structure(ls::DenseTallLinearSystem)
+function copy_structure(ls::DenseJacobianLinearSystem)
     A = ls.A
     m, n = size(A.J)
-    At = TallHessian(copy(A.J), zeros(m), zeros(m), TallQRWorkspace(A.ws.scratch, n))
-    return DenseTallLinearSystem(At, zeros(length(ls.b)), ls.x, ls.solver_ws, ls.lambda, ls.scaling)
+    At = JacobianStorage(copy(A.J), zeros(m), zeros(m), JacobianQRWorkspace(A.ws.scratch, n))
+    return DenseJacobianLinearSystem(At, zeros(length(ls.b)), ls.x, ls.solver_ws, ls.lambda, ls.scaling)
 end
-sharex(ls::DenseTallLinearSystem, from) = ls.x === from.x ? ls : DenseTallLinearSystem(ls.A, ls.b, from.x, ls.solver_ws, ls.lambda, ls.scaling)
+sharex(ls::DenseJacobianLinearSystem, from) = ls.x === from.x ? ls : DenseJacobianLinearSystem(ls.A, ls.b, from.x, ls.solver_ws, ls.lambda, ls.scaling)
 
 # QR of [J r]; afterwards Jr[1:k, 1:n] holds R (upper trapezoidal) and Jr[1:k, n+1] holds
 # q = (Qᵀr)[1:k], with k = min(m, n)
-function factor_tall!(A::TallHessian)
+function factor_jacobian!(A::JacobianStorage)
     ws = A.ws
     J, r = A.J, A.r
     m, n = size(J)
@@ -305,7 +305,7 @@ end
 
 # Numerical full rank of the n×n upper triangle stored in the top of the factored `R` (of
 # size(R, 1) rows): the smallest |R[i,i]| must exceed max(rows, n)·eps times the largest. A
-# threshold of n·eps alone misses an exactly duplicated column of a tall J, whose R[i,i] is left
+# threshold of n·eps alone misses an exactly duplicated column of a J with more rows than columns, whose R[i,i] is left
 # at the rounding error of the Householder reflections, which grows with the number of rows.
 function fullrank_upper(R::Matrix{Float64}, n::Integer)
     tol = max(size(R, 1), n) * eps(Float64)
@@ -331,12 +331,12 @@ function backsubstitute!(x::Vector{Float64}, R::Matrix{Float64}, n::Integer)
     return x
 end
 
-function solve!(ls::DenseTallLinearSystem, ::Union{StaticSymbol{:auto}, StaticSymbol{:qr}})
+function solve!(ls::DenseJacobianLinearSystem, ::Union{StaticSymbol{:auto}, StaticSymbol{:qr}})
     A = ls.A
     ws = A.ws
     m, n = size(A.J)
     size(ws.scratch.Jr, 1) == m || solvermismatch(ls, :qr)
-    factorized(ws) || factor_tall!(A)
+    factorized(ws) || factor_jacobian!(A)
     if ws.nonfinite
         fill!(ls.x, NaN)
         return NotPositiveDefinite
@@ -377,19 +377,19 @@ function solve!(ls::DenseTallLinearSystem, ::Union{StaticSymbol{:auto}, StaticSy
     return Success
 end
 
-function solve!(ls::DenseTallLinearSystem, ::StaticSymbol{S}) where S
-    throw(ArgumentError("linsolver = :$S is not supported by a DenseTallLinearSystem; use :auto or :qr."))
+function solve!(ls::DenseJacobianLinearSystem, ::StaticSymbol{S}) where S
+    throw(ArgumentError("linsolver = :$S is not supported by a DenseJacobianLinearSystem; use :auto or :qr."))
 end
 
 # QR of J works with cond(J), not cond(JᵀJ) = cond(J)², so a damping down to about eps² times the
 # diagonal of JᵀJ still changes the solve
-dampingfloor(ls::AbstractTallLinearSystem) = eps(Float64)^2
+dampingfloor(ls::AbstractJacobianLinearSystem) = eps(Float64)^2
 
 # The diagonal of JᵀJ, the squared column norms of J (computed once per linearization)
-getdiag!(d::AbstractVector, ls::AbstractTallLinearSystem) = copyto!(d, colnorms2!(ls.A))
+getdiag!(d::AbstractVector, ls::AbstractJacobianLinearSystem) = copyto!(d, colnorms2!(ls.A))
 
-# The Jacobian prototypes the tall systems are built from: their checks, size and solvers
-const JACOBIAN_SUPPORT = "A tall system is built from a Matrix{Float64} or SparseMatrixCSC{Float64, Int} Jacobian prototype or an integer number of residuals m, with linsolver = :auto or :qr, or :lsmr with Krylov.jl loaded;" *
+# The Jacobian prototypes the Jacobian systems are built from: their checks, size and solvers
+const JACOBIAN_SUPPORT = "A Jacobian system is built from a Matrix{Float64} or SparseMatrixCSC{Float64, Int} Jacobian prototype or an integer number of residuals m, with linsolver = :auto or :qr, or :lsmr with Krylov.jl loaded;" *
     " a package that implements the linear-system contract for its own prototype adds it (BlockLinearSystems.jl adds SchurBlockJacobian)"
 
 # The Jacobian prototype: a Matrix{Float64} with at least one row, or an integer m >= 1
@@ -418,6 +418,6 @@ jacobian_nrows(J) = J isa Integer ? Int(J) : size(J, 1)
 jacobian_ncols(J::AbstractMatrix) = size(J, 2)
 jacobian_ncols(J) = nothing
 function check_jacobian_linsolver(J, s::Symbol)
-    s in (:auto, :qr, :lsmr) || throw(ArgumentError("linsolver = :$s is not supported by the tall system of a $(typeof(J)) Jacobian prototype. $JACOBIAN_SUPPORT."))
+    s in (:auto, :qr, :lsmr) || throw(ArgumentError("linsolver = :$s is not supported by the Jacobian system of a $(typeof(J)) Jacobian prototype. $JACOBIAN_SUPPORT."))
     return nothing
 end

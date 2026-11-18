@@ -13,7 +13,7 @@ The package holds:
 - the [linear-system contract](contract.md): what an optimizer may call on a linear system, and what
   an implementation must do;
 - its implementations for static (`SMatrix`), dense (`Matrix`) and sparse (`SparseMatrixCSC`)
-  Hessians, and for dense, sparse and static Jacobians (the *tall* systems, which never form `JᵀJ`);
+  Hessians, and for dense, sparse and static Jacobians (the *Jacobian* systems, which never form `JᵀJ`);
 - the [solvers](solvers.md) and their selection (`:auto`, `:cholesky`, `:ldl`, `:qr`; `:cg`,
   `:minres` and `:lsmr` with Krylov.jl, `:pardiso` with Pardiso.jl);
 - [`check_linear_system`](@ref), which checks an implementation against the contract.

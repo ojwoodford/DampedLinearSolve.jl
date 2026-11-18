@@ -3,15 +3,15 @@ using DampedLinearSolve: dampen!, zero!, copy_structure, sharex, quadratic_model
 const DLS = DampedLinearSolve
 using DampedLinearSolve: getA, getb, getx, solve!   # explicit: Krylov, loaded by other test files, also exports solve!
 
-# How an optimizer fills a tall system: the linearization writes J and r, then b = Jᵀr is formed and
+# How an optimizer fills a Jacobian system: the linearization writes J and r, then b = Jᵀr is formed and
 # what was computed from the old J and r is invalidated
-include("tallfill.jl")
+include("jacobianfill.jl")
 
-# J2, J3: DenseTallLinearSystem, A = JᵀJ held implicitly, solved by QR of J
+# J2, J3: DenseJacobianLinearSystem, A = JᵀJ held implicitly, solved by QR of J
 
-# A tall system holding J and r, with b = Jᵀr, ready to solve
-function tallsystem(J, r)
-    ls = DLS.DenseTallLinearSystem(copy(J))
+# A Jacobian system holding J and r, with b = Jᵀr, ready to solve
+function jacobian_system(J, r)
+    ls = DLS.DenseJacobianLinearSystem(copy(J))
     ls.A.r .= r
     mul!(ls.b, J', r)
     DLS.markstale!(ls.A)
@@ -34,30 +34,30 @@ function conditioned_jacobian(m, n, c; seed=1)
 end
 
 # Measured in functions: at testset top level Julia 1.10 boxes the captured variables
-tall_damped(ls) = (dampen!(ls, 0.7); solve!(ls, static(:auto)))
-tall_scaled(ls, s) = (dampen!(ls, 0.7, s); solve!(ls, static(:qr)))
-tall_undamped(ls) = (DLS.markstale!(getA(ls)); dampen!(ls, 0.0); solve!(ls, static(:auto)))
-tall_relinearize(ls, w, x) = (zero!(ls); w(getb(ls), getA(ls), x))
+jacobian_damped(ls) = (dampen!(ls, 0.7); solve!(ls, static(:auto)))
+jacobian_scaled(ls, s) = (dampen!(ls, 0.7, s); solve!(ls, static(:qr)))
+jacobian_undamped(ls) = (DLS.markstale!(getA(ls)); dampen!(ls, 0.0); solve!(ls, static(:auto)))
+jacobian_relinearize(ls, w, x) = (zero!(ls); w(getb(ls), getA(ls), x))
 # Measured through a function barrier: at testset scope Julia 1.10 boxes the Float64 result (16 bytes)
-tall_quadform_allocations(A, v) = @allocated DLS.quadform(A, v)
-tall_model(ls, v) = DLS.quadform(getA(ls), v) + quadratic_model_change(ls, v) + DLS.max_diag(ls)
+jacobian_quadform_allocations(A, v) = @allocated DLS.quadform(A, v)
+jacobian_model(ls, v) = DLS.quadform(getA(ls), v) + quadratic_model_change(ls, v) + DLS.max_diag(ls)
 allocations(f::F, args::Vararg{Any, N}) where {F, N} = (f(args...); @allocated f(args...))   # specialized: 1.10 does not specialize a plain vararg here
 
-@testset "tallsystem.jl" begin
+@testset "jacobiansystem.jl" begin
     @testset "check_linear_system for m = n, m > n and m < n" begin
         for (m, n) in ((6, 6), (11, 6), (4, 6), (1, 1), (5, 1), (1, 3))
-            @test check_linear_system(s -> DLS.DenseTallLinearSystem(m, n); n, linsolvers=(:auto, :qr)) === nothing
+            @test check_linear_system(s -> DLS.DenseJacobianLinearSystem(m, n); n, linsolvers=(:auto, :qr)) === nothing
             # also built from an objective, with a prototype and with an integer m
             @test check_linear_system(s -> makejacobiansystem(zeros(m, n), n, s); n, linsolvers=(:auto,)) === nothing
             @test check_linear_system(s -> makejacobiansystem(m, n, s); n, linsolvers=(:qr,)) === nothing
         end
-        @test DLS.conformance_traits(DLS.getA(DLS.DenseTallLinearSystem(4, 6))) == (exact = false, maxrank = 4, indefinite = false, accumulates = false)
+        @test DLS.conformance_traits(DLS.getA(DLS.DenseJacobianLinearSystem(4, 6))) == (exact = false, maxrank = 4, indefinite = false, accumulates = false)
     end
 
     @testset "makejacobiansystem writes into a Matrix prototype, or builds its own J" begin
         J = zeros(7, 3)
         ls = makejacobiansystem(J, 3, :auto)
-        @test ls isa DLS.DenseTallLinearSystem && DLS.getA(ls).J === J
+        @test ls isa DLS.DenseJacobianLinearSystem && DLS.getA(ls).J === J
         ls = makejacobiansystem(7, 3, :auto)
         @test size(DLS.getA(ls).J) == (7, 3) && length(DLS.getA(ls).r) == 7 && length(getb(ls)) == 3 && length(getx(ls)) == 3
     end
@@ -66,7 +66,7 @@ allocations(f::F, args::Vararg{Any, N}) where {F, N} = (f(args...); @allocated f
         for (m, n, c) in ((20, 5, 10.0), (30, 8, 1e10), (8, 8, 1e6))
             J = conditioned_jacobian(m, n, c)
             r = J * collect(range(1.0, 2.0; length=n)) + 1e-3 * sin.(1:m)   # nonzero residual at the solution
-            ls = tallsystem(J, r)
+            ls = jacobian_system(J, r)
             g = J' * r
             s = collect(range(0.5, 3.0; length=n))
             for λ in (0.0, 1e-8, 1e-3, 0.5, 30.0)
@@ -87,7 +87,7 @@ allocations(f::F, args::Vararg{Any, N}) where {F, N} = (f(args...); @allocated f
             @test solve!(ls, :qr) == Success && DLS.getA(ls).ws.nfactor == 1
             # writing J again (zero! or the linearization wrapper) refactors
             DLS.zero!(ls)
-            TallFill((r_, J_, x) -> (r_ .= r; J_ .= J; 0.0))(getb(ls), DLS.getA(ls), nothing)
+            JacobianFill((r_, J_, x) -> (r_ .= r; J_ .= J; 0.0))(getb(ls), DLS.getA(ls), nothing)
             @test getb(ls) ≈ g
             dampen!(ls, 0.5); solve!(ls, :auto)
             @test DLS.getA(ls).ws.nfactor == 2
@@ -99,7 +99,7 @@ allocations(f::F, args::Vararg{Any, N}) where {F, N} = (f(args...); @allocated f
         J = conditioned_jacobian(40, 6, 1e10; seed=3)
         xtrue = collect(1.0:6.0)
         r = J * xtrue
-        ls = tallsystem(J, r)
+        ls = jacobian_system(J, r)
         dampen!(ls, 0.0)
         @test solve!(ls, :auto) == Success
         err_qr = norm(getx(ls) - xtrue) / norm(xtrue)
@@ -116,7 +116,7 @@ allocations(f::F, args::Vararg{Any, N}) where {F, N} = (f(args...); @allocated f
             J = randn(rng, m, n)
             J[:, n] = J[:, 1]                       # a duplicated column
             r = randn(rng, m)
-            ls = tallsystem(J, r)
+            ls = jacobian_system(J, r)
             dampen!(ls, 0.0)
             @test solve!(ls, :auto) == NotPositiveDefinite
             dampen!(ls, 1e-6)
@@ -126,7 +126,7 @@ allocations(f::F, args::Vararg{Any, N}) where {F, N} = (f(args...); @allocated f
         end
         # m < n: rank deficient by construction
         J = randn(rng, 3, 5); r = randn(rng, 3)
-        ls = tallsystem(J, r)
+        ls = jacobian_system(J, r)
         dampen!(ls, 0.0)
         @test solve!(ls, :auto) == NotPositiveDefinite
         for λ in (1e-4, 1.0)
@@ -135,7 +135,7 @@ allocations(f::F, args::Vararg{Any, N}) where {F, N} = (f(args...); @allocated f
             @test getx(ls) ≈ reference_solve(J, r, λ) rtol=1e-8
         end
         # an all-zero J (as after zero!)
-        ls = tallsystem(zeros(4, 2), ones(4))
+        ls = jacobian_system(zeros(4, 2), ones(4))
         @test solve!(ls, :auto) == NotPositiveDefinite
         dampen!(ls, 1.0)
         @test solve!(ls, :auto) == Success && getx(ls) == zeros(2)
@@ -145,7 +145,7 @@ allocations(f::F, args::Vararg{Any, N}) where {F, N} = (f(args...); @allocated f
         J = randn(Random.Xoshiro(2), 6, 3); r = ones(6)
         for (Jbad, rbad) in ((setindex!(copy(J), NaN, 2, 2), r), (setindex!(copy(J), Inf, 6, 1), r),
                              (J, setindex!(copy(r), NaN, 3)), (J, setindex!(copy(r), -Inf, 1)))
-            ls = tallsystem(Jbad, rbad)
+            ls = jacobian_system(Jbad, rbad)
             for λ in (0.0, 1.0)
                 dampen!(ls, λ)
                 status = solve!(ls, :auto)
@@ -153,25 +153,25 @@ allocations(f::F, args::Vararg{Any, N}) where {F, N} = (f(args...); @allocated f
                 @test !all(isfinite, getx(ls))
             end
         end
-        ls = tallsystem(setindex!(copy(J), NaN, 1, 3), r)
+        ls = jacobian_system(setindex!(copy(J), NaN, 1, 3), r)
         @test isnan(DLS.max_diag(ls))
-        @test DLS.max_diag(tallsystem(J, r)) == maximum(j -> sum(abs2, J[:, j]), 1:3)
+        @test DLS.max_diag(jacobian_system(J, r)) == maximum(j -> sum(abs2, J[:, j]), 1:3)
     end
 
     @testset "The rest of the interface" begin
         J = randn(Random.Xoshiro(4), 9, 4); r = randn(Random.Xoshiro(5), 9)
-        ls = tallsystem(J, r)
+        ls = jacobian_system(J, r)
         A = DLS.getA(ls)
         v = randn(4)
         @test DLS.quadform(A, v) ≈ sum(abs2, J * v)
         @test (@inferred DLS.quadform(A, v)) isa Float64
-        @test tall_quadform_allocations(A, v) == 0
+        @test jacobian_quadform_allocations(A, v) == 0
         @test quadratic_model_change(ls, v) ≈ dot(J' * r, v) + 0.5 * sum(abs2, J * v)
         @test size(A) == (4, 4)
         trial = copy_structure(ls)
         @test getx(trial) === getx(ls)
         @test DLS.getA(trial).J !== A.J && DLS.getA(trial).r !== A.r && getb(trial) !== getb(ls) && DLS.getA(trial).ws !== A.ws
-        other = DLS.DenseTallLinearSystem(9, 4)
+        other = DLS.DenseJacobianLinearSystem(9, 4)
         shared = sharex(other, ls)
         @test getx(shared) === getx(ls) && DLS.getA(shared) === DLS.getA(other) && getb(shared) === getb(other)
         @test sharex(shared, ls) === shared
@@ -184,20 +184,20 @@ allocations(f::F, args::Vararg{Any, N}) where {F, N} = (f(args...); @allocated f
     end
 
     @testset "J v and Jᵀ r are plain loops that equal mul! to rounding (P4)" begin
-        for (m, n) in ((40, 6), (6, 6), (40, 1), (1, 1), (3, 7))   # tall, square, one column, 1×1, wide
+        for (m, n) in ((40, 6), (6, 6), (40, 1), (1, 1), (3, 7))   # more rows than columns, square, one column, 1×1, wide
             rng = Random.Xoshiro(m + 100n)
             J = randn(rng, m, n); r = randn(rng, m); v = randn(rng, n)
-            ls = tallsystem(J, r)
+            ls = jacobian_system(J, r)
             A = getA(ls)
             Jv = mul!(zeros(m), J, v)
             @test DLS.quadform(A, v) ≈ dot(Jv, Jv) rtol = 4eps()
             @test A.Jv ≈ Jv rtol = 4eps()
-            @test tall_quadform_allocations(A, v) == 0
+            @test jacobian_quadform_allocations(A, v) == 0
             g = fill(NaN, n)
-            wrapper = TallFill((r_, J_, x) -> (copyto!(r_, x[1]); copyto!(J_, x[2]); 0.0))
+            wrapper = JacobianFill((r_, J_, x) -> (copyto!(r_, x[1]); copyto!(J_, x[2]); 0.0))
             wrapper(g, A, (r, J))
             @test g ≈ mul!(zeros(n), transpose(J), r) rtol = 4eps()
-            @test allocations(tall_relinearize, ls, wrapper, (r, J)) == 0
+            @test allocations(jacobian_relinearize, ls, wrapper, (r, J)) == 0
         end
     end
 
@@ -211,15 +211,15 @@ allocations(f::F, args::Vararg{Any, N}) where {F, N} = (f(args...); @allocated f
         @test (@allocated DLS.geqrf_worksize(10_000, 100)) < 500
         # and the system's construction allocates its own arrays, not two more of the problem's size
         m, n = 20_000, 50
-        DLS.DenseTallLinearSystem(m, n)
-        @test (@allocated DLS.DenseTallLinearSystem(m, n)) < 3.2 * 8 * m * (n + 1)
+        DLS.DenseJacobianLinearSystem(m, n)
+        @test (@allocated DLS.DenseJacobianLinearSystem(m, n)) < 3.2 * 8 * m * (n + 1)
     end
 
     @testset "copy_structure shares the factorization scratch (Q3)" begin
         rng = Random.Xoshiro(41)
         J1, r1 = randn(rng, 12, 4), randn(rng, 12)
         J2, r2 = randn(rng, 12, 4), randn(rng, 12)
-        ls = tallsystem(J1, r1)
+        ls = jacobian_system(J1, r1)
         trial = copy_structure(ls)
         @test getA(trial).ws.scratch === getA(ls).ws.scratch
         @test getA(trial).ws !== getA(ls).ws && getA(trial).ws.token != getA(ls).ws.token
@@ -246,28 +246,28 @@ allocations(f::F, args::Vararg{Any, N}) where {F, N} = (f(args...); @allocated f
 
     @testset "No allocation after warm-up" begin
         J = randn(Random.Xoshiro(6), 50, 7); r = randn(Random.Xoshiro(8), 50)
-        ls = tallsystem(J, r)
-        wrapper = TallFill((r_, J_, x) -> (copyto!(r_, x[1]); copyto!(J_, x[2]); 0.0))
+        ls = jacobian_system(J, r)
+        wrapper = JacobianFill((r_, J_, x) -> (copyto!(r_, x[1]); copyto!(J_, x[2]); 0.0))
         s = ones(7); v = randn(7); x = (r, J)
-        @test allocations(tall_damped, ls) == 0
-        @test allocations(tall_scaled, ls, s) == 0
-        @test allocations(tall_undamped, ls) == 0
-        @test allocations(tall_relinearize, ls, wrapper, x) == 0
-        @test allocations(tall_model, ls, v) == 0
+        @test allocations(jacobian_damped, ls) == 0
+        @test allocations(jacobian_scaled, ls, s) == 0
+        @test allocations(jacobian_undamped, ls) == 0
+        @test allocations(jacobian_relinearize, ls, wrapper, x) == 0
+        @test allocations(jacobian_model, ls, v) == 0
     end
 end
 
 # Paths the solve-level tests moved from SecondOrderOptimization did not reach on their own (rules.md 28)
-@testset "tallsystem.jl: the remaining branches" begin
+@testset "jacobiansystem.jl: the remaining branches" begin
     # J v for a J with no columns is the zero vector, written without reading v
     y = fill(NaN, 3)
     @test DLS.jmul!(y, zeros(3, 0), Float64[]) == zeros(3)
 
     # The convenience constructors of the workspace and the Hessian storage
-    ws = DLS.TallQRWorkspace(5, 2)
-    @test ws isa DLS.TallQRWorkspace && length(ws.colnorm2) == 2 && ws.stale && ws.normsstale
+    ws = DLS.JacobianQRWorkspace(5, 2)
+    @test ws isa DLS.JacobianQRWorkspace && length(ws.colnorm2) == 2 && ws.stale && ws.normsstale
     J = [1.0 2.0; 3.0 4.0; 5.0 6.0]
-    A = DLS.TallHessian(J)
+    A = DLS.JacobianStorage(J)
     @test getJ(A) === J && getr(A) == zeros(3)
     @test size(A) == (2, 2) && size(A, 1) == 2 && size(A, 2) == 2
 
@@ -298,7 +298,7 @@ end
         @test err isa ArgumentError && occursin(text, err.msg)
     end
 
-    # The prototype's size, and the solvers a tall system accepts
+    # The prototype's size, and the solvers a Jacobian system accepts
     @test jacobian_nrows(4) == 4 && jacobian_nrows(Int32(4)) === 4 && jacobian_nrows(J) == 3
     @test jacobian_ncols(J) == 2 && jacobian_ncols(4) === nothing
     for s in (:auto, :qr, :lsmr)

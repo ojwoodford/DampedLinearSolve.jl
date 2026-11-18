@@ -13,7 +13,7 @@ each rule.
 |:---|:---|
 | [`getA`](@ref), [`getb`](@ref), [`getx`](@ref) | The storage of `A`, `b` (length `n`) and `x` (length `n`). |
 | [`zero!`](@ref) | Prepares a fresh fill: zeroes `b` and accumulated storage, invalidates what was computed from the old fill. |
-| [`getJ`](@ref), [`getr`](@ref), [`gradient!`](@ref), [`markstale!`](@ref) | A tall system's storage: `J` and `r`, `b = Jᵀr`, and "`J` or `r` was written". |
+| [`getJ`](@ref), [`getr`](@ref), [`gradient!`](@ref), [`markstale!`](@ref) | A Jacobian system's storage: `J` and `r`, `b = Jᵀr`, and "`J` or `r` was written". |
 | [`dampen!`](@ref) | Records `λI` or `λ·Diagonal(s)`, applied only inside `solve!`. |
 | [`solve!`](@ref) | Solves the damped system into `x`, leaving `A` and `b` as filled; returns a [`SolveStatus`](@ref). |
 | [`max_diag`](@ref), [`getdiag!`](@ref), [`quadform`](@ref), [`quadratic_model_change`](@ref), [`dampingfloor`](@ref), [`isfinitesystem`](@ref) | Queries on the undamped system. |
@@ -29,7 +29,8 @@ Enum returned by [`solve!`](@ref):
 - [`NotPositiveDefinite`](@ref): the factorization failed, or the solution is not finite: the damped
   matrix is not positive definite, singular to working precision, or not finite. `x` is unspecified.
 - [`Indefinite`](@ref): the solve completed but found the damped matrix indefinite (`:ldl` from its
-  pivots, `:cg` from nonpositive curvature).
+  pivots, `:cg` from nonpositive curvature). `x` solves the damped system, as for `Success`, but is
+  not a descent direction to rely on.
 """
 SolveStatus
 
@@ -52,7 +53,9 @@ NotPositiveDefinite
     Indefinite
 
 [`SolveStatus`](@ref) indicating that the matrix was found indefinite, or negative curvature was
-encountered, by a solve that completed.
+encountered, by a solve that completed: `x` solves the damped system, but is not a descent direction
+to rely on. An implementation of the contract that returns `Indefinite` must leave the whole of `x`
+solved, not part of it.
 """
 Indefinite
 
@@ -86,7 +89,7 @@ makehessiansystem
 """
     makejacobiansystem(J, n, linsolver) -> AbstractLinearSystem
 
-A tall linear system built from a Jacobian prototype `J`, for `n` variables: `A = JᵀJ` held as `J`
+A Jacobian linear system built from a Jacobian prototype `J`, for `n` variables: `A = JᵀJ` held as `J`
 and the residual `r` ([`getJ`](@ref), [`getr`](@ref)), `b = Jᵀr`, and each solve the solution of
 `min ‖J x − r‖² + λ xᵀD x` from `J`, without forming `JᵀJ`.
 
@@ -128,7 +131,7 @@ checkhessian
 """
     checkjacobian(J) -> nothing
 
-Throws an `ArgumentError` if `J` is not a Jacobian prototype a tall system can be built from: a
+Throws an `ArgumentError` if `J` is not a Jacobian prototype a Jacobian system can be built from: a
 `Matrix{Float64}` or `SparseMatrixCSC{Float64, Int}` with at least one row, or an integer number of
 residuals `m ≥ 1` (or a prototype a package that implements the contract adds).
 """
@@ -137,7 +140,7 @@ checkjacobian
 """
     check_jacobian_linsolver(J, linsolver::Symbol) -> nothing
 
-Throws an `ArgumentError` if the tall system of the Jacobian prototype `J` does not take
+Throws an `ArgumentError` if the Jacobian system of the Jacobian prototype `J` does not take
 `linsolver`. The built-in prototypes take `:auto`, `:qr` and `:lsmr` (the last with Krylov.jl
 loaded, which [`checklinsolver`](@ref) checks).
 """
@@ -181,14 +184,14 @@ validatelinsolver
     getA(ls)
 
 The storage of the system's matrix `A`: a `Matrix`, an `MMatrix`, a `SparseMatrixCSC`, or a storage
-type of the system's own (for a tall system, one holding `J` and `r`: see [`getJ`](@ref)).
+type of the system's own (for a Jacobian system, one holding `J` and `r`: see [`getJ`](@ref)).
 """
 getA
 
 """
     getb(ls) -> AbstractVector
 
-The system's right-hand side `b`, of length `n`. For a tall system it is `Jᵀr`, formed by
+The system's right-hand side `b`, of length `n`. For a Jacobian system it is `Jᵀr`, formed by
 [`gradient!`](@ref).
 """
 getb
@@ -205,7 +208,7 @@ getx
 
 Prepares the system for a fresh fill, keeping its structure (pattern, workspaces): zeroes `b` and
 any storage that is accumulated into (`A` of a Hessian system), and invalidates everything computed
-from the previous fill. A tall system's `J` and `r` are set by the fill, not accumulated, so they are
+from the previous fill. A Jacobian system's `J` and `r` are set by the fill, not accumulated, so they are
 not zeroed; their factorization and column norms are invalidated.
 
 # Example
@@ -219,7 +222,7 @@ zero!
 """
     getJ(A)
 
-The Jacobian storage of the tall system storage `A = getA(ls)`, which the caller writes (it is set,
+The Jacobian `J` in the storage `A = getA(ls)` of a Jacobian system, which the caller writes (it is set,
 not accumulated). After writing it and [`getr`](@ref)`(A)`, call [`gradient!`](@ref) and
 [`markstale!`](@ref).
 """
@@ -228,14 +231,14 @@ getJ
 """
     getr(A)
 
-The residual storage of the tall system storage `A = getA(ls)`, which the caller writes.
+The residual `r` in the storage `A = getA(ls)` of a Jacobian system, which the caller writes.
 """
 getr
 
 """
     gradient!(b, A) -> b
 
-Writes `b = Jᵀr` from the tall storage `A`'s current `J` and `r` (call it with `b = getb(ls)`). For a
+Writes `b = Jᵀr` from the Jacobian storage `A`'s current `J` and `r` (call it with `b = getb(ls)`). For a
 sparse `J` it first checks that the pattern is the one the system was built for, and throws an
 `ArgumentError` if an entry was added.
 """
@@ -244,7 +247,7 @@ gradient!
 """
     markstale!(A) -> A
 
-Marks the tall storage `A`'s factorization and column norms as out of date. Call it after writing
+Marks the Jacobian storage `A`'s factorization and column norms as out of date. Call it after writing
 `J` or `r` and before the next solve or query.
 """
 markstale!
@@ -253,7 +256,7 @@ markstale!
     dampen!(ls, λ)
     dampen!(ls, λ, s)
 
-Records the damping `λI`, or `λ·Diagonal(s)` with `s` in the units of the diagonal of `A` (for a tall
+Records the damping `λI`, or `λ·Diagonal(s)` with `s` in the units of the diagonal of `A` (for a Jacobian
 system, of `JᵀJ`), not squared. The damping is applied only inside [`solve!`](@ref); `A` is left as
 it was filled. Each call replaces the damping set before, scaling included; `dampen!(ls, λ, nothing)`
 is `dampen!(ls, λ)`, and `λ = 0` is undamped.
@@ -268,10 +271,10 @@ Solves the damped system `(A + λD) x = b` into [`getx`](@ref)`(ls)` with the so
 `A` and `b` are left exactly as they were filled, whether the solve succeeds or fails.
 
 # Solvers
-- `:auto` (Cholesky for a static or dense `A`, LDLᵀ for a sparse one, QR of `J` for a tall system),
+- `:auto` (Cholesky for a static or dense `A`, LDLᵀ for a sparse one, QR of `J` for a Jacobian system),
   `:cholesky`, `:ldl` (Bunch–Kaufman for a dense `A`, LDLᵀ for a sparse one) and `:qr`.
 - With Krylov.jl loaded: `:cg` and `:minres` (dense and sparse `A`; Jacobi preconditioned on a sparse
-  `A` whenever the damped diagonal is positive) and `:lsmr` (a tall system, on `J`).
+  `A` whenever the damped diagonal is positive) and `:lsmr` (a Jacobian system, on `J`).
 - With Pardiso.jl loaded: `:pardiso` (sparse, and dense through a sparse copy).
 
 On a static system, `:qr` is an LU solve (StaticArrays has no pivoted QR), and `:ldl` uses Cholesky,
@@ -290,7 +293,7 @@ solve!
 """
     max_diag(ls)
 
-The largest absolute diagonal entry of the undamped `A` (for a tall system, the largest squared
+The largest absolute diagonal entry of the undamped `A` (for a Jacobian system, the largest squared
 column norm of `J`); `NaN` if a diagonal entry is `NaN`.
 """
 max_diag
@@ -298,7 +301,7 @@ max_diag
 """
     getdiag!(d, ls) -> d
 
-Writes the diagonal of the undamped `A` into `d` (for a tall system, the squared column norms of
+Writes the diagonal of the undamped `A` into `d` (for a Jacobian system, the squared column norms of
 `J`) and returns `d`. For building a Marquardt scaling.
 """
 getdiag!
@@ -306,7 +309,7 @@ getdiag!
 """
     quadform(A, v)
 
-The quadratic form `vᵀ A v` of the storage `A = getA(ls)` (for a tall system, `‖J v‖²`), with
+The quadratic form `vᵀ A v` of the storage `A = getA(ls)` (for a Jacobian system, `‖J v‖²`), with
 single-threaded loops for `Matrix`, `StaticArray` and `SparseMatrixCSC`; any other storage falls back
 to `LinearAlgebra.dot(v, A, v)`.
 """
@@ -324,7 +327,7 @@ quadratic_model_change
     dampingfloor(ls) -> Float64
 
 The smallest damping the system's solver resolves, relative to the diagonal: `eps(Float64)` for a
-factorization of `A + λD`, and `eps(Float64)^2` for a tall system, solved by QR of `J`, which works
+factorization of `A + λD`, and `eps(Float64)^2` for a Jacobian system, solved by QR of `J`, which works
 with the condition number of `J`.
 """
 dampingfloor
@@ -332,7 +335,7 @@ dampingfloor
 """
     isfinitesystem(ls) -> Bool
 
-Whether every stored value of `A` (for a tall system, of `J` and `r`) is finite. Damping cannot repair
+Whether every stored value of `A` (for a Jacobian system, of `J` and `r`) is finite. Damping cannot repair
 a non-finite matrix.
 """
 isfinitesystem
@@ -340,7 +343,7 @@ isfinitesystem
 """
     copy_structure(ls)
 
-A system of the same structure with its own `A` and `b` (contents unspecified; a tall system's copy
+A system of the same structure with its own `A` and `b` (contents unspecified; a Jacobian system's copy
 starts with the same `J`), for a trial point. It may share `x` and solver workspaces with `ls`;
 filling and solving one never changes the other's next solution.
 """

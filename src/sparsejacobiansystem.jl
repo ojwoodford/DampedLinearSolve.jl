@@ -92,37 +92,37 @@ function free_dense!(ws::SPQRWorkspace, D::Ptr{LSS.cholmod_dense})
 end
 
 # The per-system state: squared column norms of J and whether they are current
-mutable struct SparseTallWorkspace
+mutable struct SparseJacobianWorkspace
     const spqr::Union{Nothing, SPQRWorkspace}   # nothing for an iterative solver
     const colnorm2::Vector{Float64}
     const nnzJ::Int               # stored entries of J, which resjac! must not change
     normsstale::Bool
     nfactor::Int                  # number of SPQR numeric factorizations, for tests
 end
-SparseTallWorkspace(spqr, J::SparseMatrixCSC) = SparseTallWorkspace(spqr, Vector{Float64}(undef, size(J, 2)), nnz(J), true, 0)
+SparseJacobianWorkspace(spqr, J::SparseMatrixCSC) = SparseJacobianWorkspace(spqr, Vector{Float64}(undef, size(J, 2)), nnz(J), true, 0)
 
 """
-    SparseTallHessian
+    SparseJacobianStorage
 
-The Hessian storage of a [`SparseTallLinearSystem`](@ref): the sparse Jacobian `J` (`m × n`) and
+The Hessian storage of a [`SparseJacobianLinearSystem`](@ref): the sparse Jacobian `J` (`m × n`) and
 the residual `r` (length `m`), standing for `A = JᵀJ`, which is never formed.
 """
-struct SparseTallHessian
+struct SparseJacobianStorage
     J::SparseMatrixCSC{Float64, Int}
     r::Vector{Float64}
     Jv::Vector{Float64}           # scratch for quadform
-    ws::SparseTallWorkspace
+    ws::SparseJacobianWorkspace
 end
 
-Base.size(A::SparseTallHessian) = (size(A.J, 2), size(A.J, 2))
-Base.size(A::SparseTallHessian, d::Integer) = size(A)[d]
-markstale!(A::SparseTallHessian) = (A.ws.normsstale = true; A)
-getJ(A::SparseTallHessian) = A.J
-getr(A::SparseTallHessian) = A.r
+Base.size(A::SparseJacobianStorage) = (size(A.J, 2), size(A.J, 2))
+Base.size(A::SparseJacobianStorage, d::Integer) = size(A)[d]
+markstale!(A::SparseJacobianStorage) = (A.ws.normsstale = true; A)
+getJ(A::SparseJacobianStorage) = A.J
+getr(A::SparseJacobianStorage) = A.r
 
 # The linearization changed J's stored entries if resjac! wrote outside the pattern (which
 # inserts entries): the augmented pattern SPQR analysed would no longer be J's
-function checkpattern(A::SparseTallHessian)
+function checkpattern(A::SparseJacobianStorage)
     nnz(A.J) == A.ws.nnzJ || throw(ArgumentError("resjac! changed the sparsity pattern of J (it had $(A.ws.nnzJ) stored entries, now $(nnz(A.J))): write only entries the prototype stores."))
     return nothing
 end
@@ -141,7 +141,7 @@ function jmul!(y::AbstractVector, J::SparseMatrixCSC{Float64, Int}, v::AbstractV
 end
 
 # ‖J v‖²
-function quadform(A::SparseTallHessian, v::AbstractVector)
+function quadform(A::SparseJacobianStorage, v::AbstractVector)
     Jv = jmul!(A.Jv, A.J, v)
     total = 0.0
     @inbounds @simd for i in eachindex(Jv)
@@ -163,7 +163,7 @@ function jtr!(g::AbstractVector, J::SparseMatrixCSC{Float64, Int}, r::Vector{Flo
     return g
 end
 
-function colnorms2!(A::SparseTallHessian)
+function colnorms2!(A::SparseJacobianStorage)
     ws = A.ws
     if ws.normsstale
         nzv = nonzeros(A.J)
@@ -179,7 +179,7 @@ function colnorms2!(A::SparseTallHessian)
     return ws.colnorm2
 end
 
-function max_diag(A::SparseTallHessian)
+function max_diag(A::SparseJacobianStorage)
     md = 0.0
     for d in colnorms2!(A)
         md = max(md, d)
@@ -188,11 +188,11 @@ function max_diag(A::SparseTallHessian)
 end
 
 """
-    SparseTallLinearSystem(J::SparseMatrixCSC{Float64, Int})
+    SparseJacobianLinearSystem(J::SparseMatrixCSC{Float64, Int})
 
-The tall linear system of a residual-and-Jacobian problem with a sparse Jacobian prototype: the normal
+The Jacobian linear system of a residual-and-Jacobian problem with a sparse Jacobian prototype: the normal
 equations `(JᵀJ + λD) x = Jᵀr`, with `JᵀJ` never formed. `getA(ls)` is a
-[`SparseTallHessian`](@ref) holding `J` (the given matrix, used as storage) and `r`; `getb(ls)`
+[`SparseJacobianStorage`](@ref) holding `J` (the given matrix, used as storage) and `r`; `getb(ls)`
 is the gradient `Jᵀr`.
 
 `solve!(ls, :auto)` (or `:qr`) solves `min ‖[J; √λ D^½] x − [r; 0]‖` by SuiteSparse's SPQR. The
@@ -202,7 +202,7 @@ factorization (unlike the dense system, which refactors only an `n × n` block).
 its working memory inside each solve and frees it again (the stated exception to "nothing
 allocates in the loop"); nothing else allocates after construction.
 
-As for [`DenseTallLinearSystem`](@ref): an undamped solve on a numerically rank-deficient `J`
+As for [`DenseJacobianLinearSystem`](@ref): an undamped solve on a numerically rank-deficient `J`
 (SPQR's rank estimate below `n` at a column-norm tolerance of `max(m + n, n)·eps` times the
 largest column norm of the augmented matrix, which includes `m < n`) returns
 `NotPositiveDefinite`, as does a damped one whose augmented matrix is rank deficient at that
@@ -211,44 +211,44 @@ tolerance, and a `NaN` or `Inf` in `J` or `r` returns `NotPositiveDefinite` with
 stores: writing any other entry inserts it, which changes the pattern, and `gradient!` throws an
 `ArgumentError`.
 """
-mutable struct SparseTallLinearSystem{W} <: AbstractTallLinearSystem
-    const A::SparseTallHessian
+mutable struct SparseJacobianLinearSystem{W} <: AbstractJacobianLinearSystem
+    const A::SparseJacobianStorage
     const b::Vector{Float64}
     const x::Vector{Float64}
-    const solver_ws::W            # an iterative solver's workspace (`maketallws`), or nothing for SPQR
+    const solver_ws::W            # an iterative solver's workspace (`makejacobianws`), or nothing for SPQR
     lambda::Float64
     scaling::Union{Nothing, Vector{Float64}}
 end
-function SparseTallLinearSystem(J::SparseMatrixCSC{Float64, Int}; linsolver = :auto)
+function SparseJacobianLinearSystem(J::SparseMatrixCSC{Float64, Int}; linsolver = :auto)
     m, n = size(J)
     spqr = needsqr(linsolver) ? SPQRWorkspace(J) : nothing   # an iterative solver needs no analysis
-    A = SparseTallHessian(J, zeros(m), zeros(m), SparseTallWorkspace(spqr, J))
-    return SparseTallLinearSystem(A, zeros(n), zeros(n), maketallws(m, n, linsolver), 0.0, nothing)
+    A = SparseJacobianStorage(J, zeros(m), zeros(m), SparseJacobianWorkspace(spqr, J))
+    return SparseJacobianLinearSystem(A, zeros(n), zeros(n), makejacobianws(m, n, linsolver), 0.0, nothing)
 end
 
-makejacobiansystem(J::SparseMatrixCSC{Float64, Int}, n, linsolver) = SparseTallLinearSystem(J; linsolver)
-isfinitesystem(ls::SparseTallLinearSystem) = all(isfinite, nonzeros(ls.A.J)) && all(isfinite, ls.A.r)
+makejacobiansystem(J::SparseMatrixCSC{Float64, Int}, n, linsolver) = SparseJacobianLinearSystem(J; linsolver)
+isfinitesystem(ls::SparseJacobianLinearSystem) = all(isfinite, nonzeros(ls.A.J)) && all(isfinite, ls.A.r)
 
-zero!(ls::SparseTallLinearSystem) = (fill!(ls.b, 0.0); markstale!(ls.A); ls)
+zero!(ls::SparseJacobianLinearSystem) = (fill!(ls.b, 0.0); markstale!(ls.A); ls)
 
 # The trial system: its own J (same pattern and entries), r, b and column norms; the SPQR state
 # is shared
-function copy_structure(ls::SparseTallLinearSystem)
+function copy_structure(ls::SparseJacobianLinearSystem)
     A = ls.A
     m, n = size(A.J)
     J = copy(A.J)
-    At = SparseTallHessian(J, zeros(m), zeros(m), SparseTallWorkspace(A.ws.spqr, J))
-    return SparseTallLinearSystem(At, zeros(length(ls.b)), ls.x, ls.solver_ws, ls.lambda, ls.scaling)
+    At = SparseJacobianStorage(J, zeros(m), zeros(m), SparseJacobianWorkspace(A.ws.spqr, J))
+    return SparseJacobianLinearSystem(At, zeros(length(ls.b)), ls.x, ls.solver_ws, ls.lambda, ls.scaling)
 end
-sharex(ls::SparseTallLinearSystem, from) = ls.x === from.x ? ls : SparseTallLinearSystem(ls.A, ls.b, from.x, ls.solver_ws, ls.lambda, ls.scaling)
+sharex(ls::SparseJacobianLinearSystem, from) = ls.x === from.x ? ls : SparseJacobianLinearSystem(ls.A, ls.b, from.x, ls.solver_ws, ls.lambda, ls.scaling)
 
 # The gradient Jᵀr, after checking that the linearization kept J's pattern
-function gradient!(g::AbstractVector, A::SparseTallHessian)
+function gradient!(g::AbstractVector, A::SparseJacobianStorage)
     checkpattern(A)
     return jtr!(g, A.J, A.r)
 end
 
-function solve!(ls::SparseTallLinearSystem, ::Union{StaticSymbol{:auto}, StaticSymbol{:qr}})
+function solve!(ls::SparseJacobianLinearSystem, ::Union{StaticSymbol{:auto}, StaticSymbol{:qr}})
     A = ls.A
     if !(all(isfinite, nonzeros(A.J)) && all(isfinite, A.r))
         fill!(ls.x, NaN)
@@ -268,7 +268,7 @@ The least-squares solution `x` of `[J; √(λ s)] x = [r; 0]` by SPQR, with `sp`
 the augmented storage in place, and SPQR's numeric factorization, Qᵀb and triangular solve run. Returns
 `NotPositiveDefinite` when the augmented matrix is numerically rank deficient (SPQR's rank estimate below
 `n` at a column-norm tolerance of `max(m + n, n)·eps` times its largest column norm), `Success` otherwise.
-The caller checks that `J` and `r` are finite. Shared by the sparse tall system and the sparse reduced
+The caller checks that `J` and `r` are finite. Shared by the sparse Jacobian system and the sparse reduced
 system of QR elimination.
 """
 function spqr_solve!(x::AbstractVector, sp::SPQRWorkspace, J::SparseMatrixCSC{Float64, Int}, r::AbstractVector, lambda::Float64, scaling)
@@ -315,6 +315,6 @@ function spqr_solve!(x::AbstractVector, sp::SPQRWorkspace, J::SparseMatrixCSC{Fl
     return Success
 end
 
-function solve!(ls::SparseTallLinearSystem, ::StaticSymbol{S}) where S
-    throw(ArgumentError("linsolver = :$S is not supported by a SparseTallLinearSystem; use :auto or :qr."))
+function solve!(ls::SparseJacobianLinearSystem, ::StaticSymbol{S}) where S
+    throw(ArgumentError("linsolver = :$S is not supported by a SparseJacobianLinearSystem; use :auto or :qr."))
 end

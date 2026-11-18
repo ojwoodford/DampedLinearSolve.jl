@@ -28,7 +28,7 @@ end
 
     @test DampedLinearSolve.validatelinsolver(:cg)
     @test DampedLinearSolve.validatelinsolver(:minres)
-    # M10: LSMR is for a tall system: on the Hessian it would work with H'H, squaring its condition
+    # M10: LSMR is for a Jacobian system: on the Hessian it would work with H'H, squaring its condition
     # number again (test/lsmr.jl)
     @test DampedLinearSolve.validatelinsolver(:lsmr)
     # X2: :krylov was an alias of :cg and is gone; it fails validation like any unknown solver
@@ -220,7 +220,7 @@ end
         @test solve!(ls, static(s)) == Success
         @test getx(ls) ≈ A \ b rtol = 1e-6
     end
-    # A tall system built for QR is not solved by LSMR
+    # A Jacobian system built for QR is not solved by LSMR
     for J in (ones(4, 2), sparse(ones(4, 2)))
         ls = makejacobiansystem(J, 2, :auto)
         @test_throws ArgumentError solve!(ls, static(:lsmr))
@@ -228,10 +228,10 @@ end
     # J as an operator for LSMR, and its adjoint
     KExt = Base.get_extension(DampedLinearSolve, :KrylovExt)
     J = [1.0 2.0; 3.0 4.0; 5.0 6.0]
-    op = KExt.TallOperator(J)
+    op = KExt.JacobianOperator(J)
     @test size(op) == (3, 2) && size(op, 1) == 3 && size(op, 2) == 2
     opt = op'
-    @test opt isa KExt.TallOperatorT
+    @test opt isa KExt.JacobianOperatorT
     @test size(opt) == (2, 3) && size(opt, 1) == 2 && size(opt, 2) == 3
     @test eltype(op) == eltype(opt) == Float64
     @test mul!(zeros(3), op, [1.0, -1.0]) ≈ J * [1.0, -1.0]

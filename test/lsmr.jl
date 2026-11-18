@@ -4,7 +4,7 @@ using DampedLinearSolve: dampen!, zero!, Success, NotPositiveDefinite, check_lin
 using DampedLinearSolve: getA, getb, getx, solve!
 const DLS = DampedLinearSolve
 
-# TP2: LSMR on the Jacobian of the dense and sparse tall systems (KrylovExt), against their QR solve
+# TP2: LSMR on the Jacobian of the dense and sparse Jacobian systems (KrylovExt), against their QR solve
 
 function tp2_set!(ls, r)
     zero!(ls)
@@ -47,8 +47,8 @@ end
         rng = Xoshiro(m + 7n)
         J = sprandn(rng, m, n, 0.5) + sparse(1:min(m, n), 1:min(m, n), 1.0, m, n)
         r = randn(rng, m)
-        ll = kind === :dense ? DLS.DenseTallLinearSystem(Matrix(J); linsolver = :lsmr) : DLS.SparseTallLinearSystem(copy(J); linsolver = :lsmr)
-        lq = DLS.DenseTallLinearSystem(Matrix(J))
+        ll = kind === :dense ? DLS.DenseJacobianLinearSystem(Matrix(J); linsolver = :lsmr) : DLS.SparseJacobianLinearSystem(copy(J); linsolver = :lsmr)
+        lq = DLS.DenseJacobianLinearSystem(Matrix(J))
         tp2_set!(ll, r); tp2_set!(lq, r)
         for (lambda, scaling) in ((0.0, nothing), (0.3, nothing), (0.3, 0.5 .+ rand(rng, n)), (1e-8, nothing))
             a, b = tp2_solve!(ll, :lsmr, lambda, scaling), tp2_solve!(lq, :qr, lambda, scaling)
@@ -65,7 +65,7 @@ end
 
     @testset "Non-finite J or r" begin
         for (J, r) in (([1.0 NaN; 0.0 1.0; 1.0 1.0], ones(3)), ([1.0 0.0; 0.0 1.0; 1.0 1.0], [1.0, Inf, 0.0]))
-            for ll in (DLS.DenseTallLinearSystem(copy(J); linsolver = :lsmr), DLS.SparseTallLinearSystem(sparse(J); linsolver = :lsmr))
+            for ll in (DLS.DenseJacobianLinearSystem(copy(J); linsolver = :lsmr), DLS.SparseJacobianLinearSystem(sparse(J); linsolver = :lsmr))
                 tp2_set!(ll, r)
                 @test tp2_solve!(ll, :lsmr, 1.0, nothing) == NotPositiveDefinite
                 @test all(isnan, getx(ll))
@@ -74,7 +74,7 @@ end
     end
 
     @testset "Meets the linear-system interface: $kind ($m, $n)" for kind in (:dense, :sparse), (m, n) in ((8, 5), (5, 5), (3, 5), (8, 1))
-        make = kind === :dense ? (s -> DLS.DenseTallLinearSystem(m, n; linsolver = :lsmr)) : (s -> DLS.SparseTallLinearSystem(sparse(ones(m, n)); linsolver = :lsmr))
+        make = kind === :dense ? (s -> DLS.DenseJacobianLinearSystem(m, n; linsolver = :lsmr)) : (s -> DLS.SparseJacobianLinearSystem(sparse(ones(m, n)); linsolver = :lsmr))
         @test isnothing(check_linear_system(make; n, linsolvers = (:lsmr,), rtol = 1e-6))
     end
 

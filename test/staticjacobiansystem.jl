@@ -3,7 +3,7 @@ using DampedLinearSolve: dampen!, zero!, Success, NotPositiveDefinite, check_lin
 using DampedLinearSolve: getA, getb, getx, solve!
 const DLS = DampedLinearSolve
 
-# TP4: the static tall system for small problems, against the dense tall system
+# TP4: the static Jacobian system for small problems, against the dense Jacobian system
 
 function tp4_set!(ls, r)
     zero!(ls)
@@ -33,11 +33,11 @@ function tp4_resjac!(r, J, x)
     return tp4_cost(x)
 end
 
-@testset "statictallsystem.jl" begin
-    @testset "Steps equal the dense tall system's: ($m, $n)" for (m, n) in ((8, 3), (3, 3), (12, 1), (2, 5), (6, 6), (24, 2))
+@testset "staticjacobiansystem.jl" begin
+    @testset "Steps equal the dense Jacobian system's: ($m, $n)" for (m, n) in ((8, 3), (3, 3), (12, 1), (2, 5), (6, 6), (24, 2))
         rng = Xoshiro(m + 10n)
         J, r = randn(rng, m, n), randn(rng, m)
-        ls, ld = tp4_set!(DLS.StaticTallLinearSystem(copy(J)), r), tp4_set!(DLS.DenseTallLinearSystem(copy(J)), r)
+        ls, ld = tp4_set!(DLS.StaticJacobianLinearSystem(copy(J)), r), tp4_set!(DLS.DenseJacobianLinearSystem(copy(J)), r)
         @test getb(ls) ≈ getb(ld) rtol = 1e-14
         v = randn(rng, n)
         @test DLS.quadform(getA(ls), v) ≈ DLS.quadform(getA(ld), v) rtol = 1e-14
@@ -50,22 +50,22 @@ end
         # a duplicated column is rank deficient undamped, as for the dense system
         Jr = hcat(J, J[:, 1])
         if m * (n + 1) <= 64
-            lr, lq = tp4_set!(DLS.StaticTallLinearSystem(copy(Jr)), r), tp4_set!(DLS.DenseTallLinearSystem(copy(Jr)), r)
+            lr, lq = tp4_set!(DLS.StaticJacobianLinearSystem(copy(Jr)), r), tp4_set!(DLS.DenseJacobianLinearSystem(copy(Jr)), r)
             @test tp4_solve!(lr, 0.0, nothing) == tp4_solve!(lq, 0.0, nothing)
         end
     end
 
     @testset "Non-finite J or r" begin
         for (J, r) in (([1.0 NaN; 0.0 1.0; 1.0 1.0], ones(3)), ([1.0 0.0; 0.0 1.0; 1.0 1.0], [1.0, Inf, 0.0]))
-            ls = tp4_set!(DLS.StaticTallLinearSystem(copy(J)), r)
+            ls = tp4_set!(DLS.StaticJacobianLinearSystem(copy(J)), r)
             @test tp4_solve!(ls, 1.0, nothing) == NotPositiveDefinite
             @test all(isnan, getx(ls))
         end
-        @test_throws ArgumentError solve!(DLS.StaticTallLinearSystem(ones(3, 2)), static(:cholesky))
+        @test_throws ArgumentError solve!(DLS.StaticJacobianLinearSystem(ones(3, 2)), static(:cholesky))
     end
 
     @testset "Meets the linear-system interface: ($m, $n)" for (m, n) in ((8, 5), (5, 5), (3, 5), (8, 1))
-        @test isnothing(check_linear_system(s -> DLS.StaticTallLinearSystem(zeros(m, n)); n, linsolvers = (:auto, :qr)))
+        @test isnothing(check_linear_system(s -> DLS.StaticJacobianLinearSystem(zeros(m, n)); n, linsolvers = (:auto, :qr)))
     end
 
 
@@ -73,9 +73,9 @@ end
 end
 
 # Paths the solve-level tests moved from SecondOrderOptimization did not reach on their own (rules.md 28)
-@testset "statictallsystem.jl: the remaining branches" begin
+@testset "staticjacobiansystem.jl: the remaining branches" begin
     J = [1.0 2.0; 3.0 4.0; 5.0 6.0]
-    ls = DLS.StaticTallLinearSystem(copy(J))
+    ls = DLS.StaticJacobianLinearSystem(copy(J))
     A = getA(ls)
     getr(A) .= [1.0, -1.0, 2.0]
     @test size(A) == (2, 2) && size(A, 1) == 2 && size(A, 2) == 2
