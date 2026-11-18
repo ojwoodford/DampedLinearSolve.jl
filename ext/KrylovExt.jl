@@ -167,7 +167,7 @@ end
 # preconditioner N = F⁻¹. Nothing is augmented and JᵀJ is never formed. J's products are this
 # package's plain loops (`jmul!`, `jtr!`), not BLAS (rules.md 23).
 
-# The tolerances (LSMR_ETOL and the rest, in tallsystem.jl) are starting values, not measured.
+# The tolerances (LSMR_ETOL and the rest, in jacobiansystem.jl) are starting values, not measured.
 
 struct TallLsmrWorkspace{W}
     ws::W

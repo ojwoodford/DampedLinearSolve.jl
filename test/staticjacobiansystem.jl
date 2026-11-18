@@ -33,7 +33,7 @@ function tp4_resjac!(r, J, x)
     return tp4_cost(x)
 end
 
-@testset "statictallsystem.jl" begin
+@testset "staticjacobiansystem.jl" begin
     @testset "Steps equal the dense tall system's: ($m, $n)" for (m, n) in ((8, 3), (3, 3), (12, 1), (2, 5), (6, 6), (24, 2))
         rng = Xoshiro(m + 10n)
         J, r = randn(rng, m, n), randn(rng, m)
@@ -73,7 +73,7 @@ end
 end
 
 # Paths the solve-level tests moved from SecondOrderOptimization did not reach on their own (rules.md 28)
-@testset "statictallsystem.jl: the remaining branches" begin
+@testset "staticjacobiansystem.jl: the remaining branches" begin
     J = [1.0 2.0; 3.0 4.0; 5.0 6.0]
     ls = DLS.StaticTallLinearSystem(copy(J))
     A = getA(ls)

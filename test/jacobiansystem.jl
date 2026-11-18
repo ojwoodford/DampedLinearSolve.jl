@@ -5,7 +5,7 @@ using DampedLinearSolve: getA, getb, getx, solve!   # explicit: Krylov, loaded b
 
 # How an optimizer fills a tall system: the linearization writes J and r, then b = Jᵀr is formed and
 # what was computed from the old J and r is invalidated
-include("tallfill.jl")
+include("jacobianfill.jl")
 
 # J2, J3: DenseTallLinearSystem, A = JᵀJ held implicitly, solved by QR of J
 
@@ -43,7 +43,7 @@ tall_quadform_allocations(A, v) = @allocated DLS.quadform(A, v)
 tall_model(ls, v) = DLS.quadform(getA(ls), v) + quadratic_model_change(ls, v) + DLS.max_diag(ls)
 allocations(f::F, args::Vararg{Any, N}) where {F, N} = (f(args...); @allocated f(args...))   # specialized: 1.10 does not specialize a plain vararg here
 
-@testset "tallsystem.jl" begin
+@testset "jacobiansystem.jl" begin
     @testset "check_linear_system for m = n, m > n and m < n" begin
         for (m, n) in ((6, 6), (11, 6), (4, 6), (1, 1), (5, 1), (1, 3))
             @test check_linear_system(s -> DLS.DenseTallLinearSystem(m, n); n, linsolvers=(:auto, :qr)) === nothing
@@ -258,7 +258,7 @@ allocations(f::F, args::Vararg{Any, N}) where {F, N} = (f(args...); @allocated f
 end
 
 # Paths the solve-level tests moved from SecondOrderOptimization did not reach on their own (rules.md 28)
-@testset "tallsystem.jl: the remaining branches" begin
+@testset "jacobiansystem.jl: the remaining branches" begin
     # J v for a J with no columns is the zero vector, written without reading v
     y = fill(NaN, 3)
     @test DLS.jmul!(y, zeros(3, 0), Float64[]) == zeros(3)

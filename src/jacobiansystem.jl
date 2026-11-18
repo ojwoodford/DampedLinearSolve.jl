@@ -250,9 +250,9 @@ const LSMR_CONLIM = 1 / sqrt(eps(Float64))
 # The tall system of `n` variables for the Jacobian prototype `J`. A Matrix prototype is the storage
 # resjac! writes into, used with the values it holds: entries resjac! never writes keep the caller's
 # values. With an integer m the matrix starts as zeros. The prototype's type selects the system (a
-# sparse one in sparsetallsystem.jl).
+# sparse one in sparsejacobiansystem.jl).
 # A small problem with a static number of variables (`n` a `StaticInt`) gets the static system
-# (statictallsystem.jl). The choice depends on m, known only at run time, so it is made here, once,
+# (staticjacobiansystem.jl). The choice depends on m, known only at run time, so it is made here, once,
 # when the system is built.
 function makejacobiansystem(m::Integer, n, linsolver)
     usesstatictall(m, n, linsolver) && return StaticTallLinearSystem(zeros(MMatrix{Int(m), dynamic(n), Float64}))

@@ -288,7 +288,7 @@ end
 
 # The smallest damping the solver resolves, relative to the diagonal: below about eps times the
 # diagonal, Cholesky of A + λD no longer sees the damping. The tall system, solved by QR of J,
-# tolerates about eps² (see tallsystem.jl).
+# tolerates about eps² (see jacobiansystem.jl).
 dampingfloor(ls) = eps(Float64)
 
 # Change in the undamped quadratic model, 0.5 dx'H dx + g'dx, for a step dx (negative for a

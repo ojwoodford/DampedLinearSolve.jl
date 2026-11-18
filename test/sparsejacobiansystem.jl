@@ -5,7 +5,7 @@ const DLS = DampedLinearSolve
 
 # How an optimizer fills a tall system: the linearization writes J and r, then b = Jᵀr is formed and
 # what was computed from the old J and r is invalidated
-include("tallfill.jl")
+include("jacobianfill.jl")
 
 # TP1: the sparse tall system (a SparseMatrixCSC{Float64, Int} Jacobian, solved by SPQR) against
 # the dense tall system on the same J
@@ -52,7 +52,7 @@ function tp1_resjac!(r, J, x)
     return tp1_cost(x)
 end
 
-@testset "sparsetallsystem.jl" begin
+@testset "sparsejacobiansystem.jl" begin
     @testset "Steps equal the dense tall system's: ($m, $n)" for (m, n) in ((30, 6), (6, 6), (30, 1), (4, 6))
         rng = Xoshiro(m + 10n)
         J = sprandn(rng, m, n, 0.4) + sparse(1:min(m, n), 1:min(m, n), 1.0, m, n)
@@ -113,7 +113,7 @@ end
 end
 
 # Paths the solve-level tests moved from SecondOrderOptimization did not reach on their own (rules.md 28)
-@testset "sparsetallsystem.jl: the remaining branches" begin
+@testset "sparsejacobiansystem.jl: the remaining branches" begin
     J = sparse([1.0 0.0; 3.0 4.0; 0.0 6.0])
     ls = DLS.SparseTallLinearSystem(copy(J))
     A = getA(ls)
