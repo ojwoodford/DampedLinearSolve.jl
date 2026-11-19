@@ -104,8 +104,9 @@ These read the system as filled, whatever damping is recorded:
 - `quadratic_model_change(ls, dx)`: `dxᵀ A dx / 2 + bᵀ dx`, the change in the quadratic model for a
   step `dx`.
 - `dampingfloor(ls)`: the smallest damping the solver resolves, relative to the diagonal: about
-  `eps(Float64)` for a factorization of `A + λD`, and `eps(Float64)^2` for QR of `J`, which works with
-  the condition number of `J`.
+  `eps(Float64)` for a factorization of `A + λD` (including the normal equations of a dense Jacobian
+  system, `:cholesky` and `:ldl`, which factor `JᵀJ + λD`), and `eps(Float64)^2` for QR of `J` (and
+  LSMR on `J`), which works with the condition number of `J`.
 - `isfinitesystem(ls)`: whether every stored value of `A` (of `J` and `r`) is finite. Damping cannot
   repair a non-finite matrix, so an optimizer stops retrying when this is false.
 
@@ -127,7 +128,8 @@ accepted:
 | static (`MMatrix`, `StaticMatrix`, static `n`) | Cholesky | Cholesky | Cholesky, then LU (`Indefinite`) | LU | | | |
 | dense (`Matrix`, `Int` `n`) | Cholesky | Cholesky | Bunch–Kaufman | pivoted QR of `A` | yes | | yes (copies to sparse per solve) |
 | sparse (`SparseMatrixCSC`) | LDLᵀ (LDLFactorizations) | CHOLMOD | LDLᵀ | sparse QR of `A` | yes, Jacobi preconditioned | | yes |
-| Jacobian, dense or static (`Matrix`, `Int` `m`) | QR of `J` | | | QR of `J` | | LSMR on `J` (not static) | |
+| Jacobian, dense (`Matrix`, `Int` `m`) | QR of `J` | Cholesky of `JᵀJ`, formed once per linearization (BLAS `syrk`) | Bunch–Kaufman of `JᵀJ` | QR of `J` | | LSMR on `J` | |
+| Jacobian, static (static `n`, `m·n ≤ 48`, a QR solver) | QR of `J` | | | QR of `J` | | | |
 | Jacobian, sparse (`SparseMatrixCSC`) | SPQR of `J` | | | SPQR of `J` | | LSMR on `J` | |
 
 `:auto` is the default. `validatelinsolver` knows the solver names of the packages loaded.

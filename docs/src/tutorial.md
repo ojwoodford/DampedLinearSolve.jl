@@ -80,3 +80,19 @@ true
 
 The factorization of `J` is kept between the two solves: a new damping refactors only an `n × n`
 block. A spare system for a trial point comes from [`copy_structure`](@ref).
+
+The same system built for `:cholesky` solves the normal equations instead: it forms `JᵀJ` once per
+linearization and factors `JᵀJ + λI` for each damping. That is cheaper than QR when `m` is well
+above `n`, and squares the condition number of `J`, so it suits a well-conditioned `J`.
+
+```jldoctest jacobian
+julia> ne = makejacobiansystem(4, 2, :cholesky); B = getA(ne);
+
+julia> getJ(B) .= J; getr(B) .= r; gradient!(getb(ne), B); markstale!(B);
+
+julia> dampen!(ne, 0.5); solve!(ne, :cholesky)
+Success::SolveStatus = 0
+
+julia> getx(ne) ≈ getx(ls)                       # the damped solution of the QR-built system
+true
+```
