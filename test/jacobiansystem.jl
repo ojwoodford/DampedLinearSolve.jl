@@ -304,6 +304,7 @@ end
     for s in (:auto, :qr, :lsmr)
         @test check_jacobian_linsolver(J, s) === nothing
     end
-    err = try check_jacobian_linsolver(J, :cholesky); nothing catch e; e end
+    # the normal-equations solvers for a dense prototype only (jacobiannormalsystem.jl)
+    err = try check_jacobian_linsolver(DLS.SparseArrays.sparse(J), :cholesky); nothing catch e; e end
     @test err isa ArgumentError && occursin("linsolver = :cholesky is not supported", err.msg)
 end

@@ -91,7 +91,7 @@ makehessiansystem
 
 A Jacobian linear system built from a Jacobian prototype `J`, for `n` variables: `A = JᵀJ` held as `J`
 and the residual `r` ([`getJ`](@ref), [`getr`](@ref)), `b = Jᵀr`, and each solve the solution of
-`min ‖J x − r‖² + λ xᵀD x` from `J`, without forming `JᵀJ`.
+`min ‖J x − r‖² + λ xᵀD x` from `J`, without forming `JᵀJ` unless `linsolver` is `:cholesky` or `:ldl`.
 
 - `J::Matrix{Float64}`: a dense system that writes into `J` (with the values it holds); static
   (`StaticArrays`) when `n` is a `Static.StaticInt`, `linsolver` is QR (`:auto` or `:qr`) and
@@ -100,8 +100,12 @@ and the residual `r` ([`getJ`](@ref), [`getr`](@ref)), `b = Jᵀr`, and each sol
 - `J::SparseMatrixCSC{Float64, Int}`: a sparse system, solved by SuiteSparse's SPQR, its symbolic
   analysis done here, once.
 
-`linsolver` is `:auto` or `:qr` (QR of `J`), or `:lsmr` with Krylov.jl loaded. Validate `J` first
-with [`checkjacobian`](@ref) and [`check_jacobian_linsolver`](@ref).
+`linsolver` is `:auto` or `:qr` (QR of `J`), or `:lsmr` with Krylov.jl loaded. For a dense `J` (a
+`Matrix{Float64}` or an integer `m`) it can also be `:cholesky` or `:ldl`: the normal equations,
+`JᵀJ` formed once per linearization (BLAS `syrk`) and `JᵀJ + λD` factored per damping by Cholesky or
+Bunch–Kaufman; always the dense system, never the static one, whatever `n`. They square the condition
+number of `J`, so `:auto` is QR (see `DenseJacobianLinearSystem` for costs). Validate `J` first with
+[`checkjacobian`](@ref) and [`check_jacobian_linsolver`](@ref).
 
 # Example
 ```julia
@@ -142,7 +146,8 @@ checkjacobian
 
 Throws an `ArgumentError` if the Jacobian system of the Jacobian prototype `J` does not take
 `linsolver`. The built-in prototypes take `:auto`, `:qr` and `:lsmr` (the last with Krylov.jl
-loaded, which [`checklinsolver`](@ref) checks).
+loaded, which [`checklinsolver`](@ref) checks); a dense one (a `Matrix{Float64}` or an integer `m`)
+also takes `:cholesky` and `:ldl` (the normal equations), and a `SparseMatrixCSC` one does not.
 """
 check_jacobian_linsolver
 
@@ -327,8 +332,9 @@ quadratic_model_change
     dampingfloor(ls) -> Float64
 
 The smallest damping the system's solver resolves, relative to the diagonal: `eps(Float64)` for a
-factorization of `A + λD`, and `eps(Float64)^2` for a Jacobian system, solved by QR of `J`, which works
-with the condition number of `J`.
+factorization of `A + λD`, including a dense Jacobian system built for `:cholesky` or `:ldl` (which
+factors `JᵀJ + λD`), and `eps(Float64)^2` for a Jacobian system solved by QR of `J` (or LSMR), which
+works with the condition number of `J`.
 """
 dampingfloor
 

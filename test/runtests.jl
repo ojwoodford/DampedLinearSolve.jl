@@ -10,6 +10,7 @@ using Test
     include("linearsolve.jl")
     include("conformance.jl")
     include("jacobiansystem.jl")
+    include("jacobiannormalsystem.jl")
     include("sparsejacobiansystem.jl")
     include("staticjacobiansystem.jl")
     include("extensions.jl")
