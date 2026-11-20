@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><meta name="referrer" content="no-referrer"/><title>Tutorial: solving damped systems · DampedLinearSolve.jl</title><meta name="title" content="Tutorial: solving damped systems · DampedLinearSolve.jl"/><meta property="og:title" content="Tutorial: solving damped systems · DampedLinearSolve.jl"/><meta property="twitter:title" content="Tutorial: solving damped systems · DampedLinearSolve.jl"/><meta name="description" content="Documentation for DampedLinearSolve.jl."/><meta property="og:description" content="Documentation for DampedLinearSolve.jl."/><meta property="twitter:description" content="Documentation for DampedLinearSolve.jl."/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.63.2/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">DampedLinearSolve.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><a class="tocitem" href="../contract/">The linear-system contract</a></li><li><a class="tocitem" href="../solvers/">Solvers</a></li><li><a class="tocitem" href="../damping/">Damping</a></li><li class="is-active"><a class="tocitem" href>Tutorial: solving damped systems</a><ul class="internal"><li><a class="tocitem" href="#A-dense-Hessian"><span>A dense Hessian</span></a></li><li><a class="tocitem" href="#A-sparse-Hessian"><span>A sparse Hessian</span></a></li><li><a class="tocitem" href="#A-Jacobian-system"><span>A Jacobian system</span></a></li></ul></li><li><a class="tocitem" href="../implementing/">Implementing the contract</a></li><li><a class="tocitem" href="../api/">API Reference</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Tutorial: solving damped systems</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Tutorial: solving damped systems</a></li></ul></nav><div class="docs-right"><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Tutorial:-solving-damped-systems"><a class="docs-heading-anchor" href="#Tutorial:-solving-damped-systems">Tutorial: solving damped systems</a><a id="Tutorial:-solving-damped-systems-1"></a><a class="docs-heading-anchor-permalink" href="#Tutorial:-solving-damped-systems" title="Permalink"></a></h1><h2 id="A-dense-Hessian"><a class="docs-heading-anchor" href="#A-dense-Hessian">A dense Hessian</a><a id="A-dense-Hessian-1"></a><a class="docs-heading-anchor-permalink" href="#A-dense-Hessian" title="Permalink"></a></h2><pre><code class="language-julia-repl hljs">julia&gt; H = [4.0 1.0 0.0; 1.0 3.0 1.0; 0.0 1.0 2.0]; g = [1.0, 0.0, -1.0];
+
+julia&gt; ls = makehessiansystem(copy(H), :ldl);    # Bunch–Kaufman workspace preallocated
+
+julia&gt; getA(ls) .= H; getb(ls) .= g;
+
+julia&gt; dampen!(ls, 0.1); solve!(ls, :ldl)
+Success::SolveStatus = 0
+
+julia&gt; getx(ls) ≈ (H + 0.1I) \ g                # the damped Newton step is -getx(ls)
+true
+
+julia&gt; quadratic_model_change(ls, -getx(ls)) &lt; 0  # a descent step
+true</code></pre><p>An indefinite matrix is reported, not hidden:</p><pre><code class="language-julia-repl hljs">julia&gt; getA(ls)[1, 1] = -4.0; dampen!(ls, 0.0); solve!(ls, :ldl)
+Indefinite::SolveStatus = 2
+
+julia&gt; solve!(makehessiansystem(copy(getA(ls)), :cholesky), :cholesky)
+NotPositiveDefinite::SolveStatus = 1</code></pre><h2 id="A-sparse-Hessian"><a class="docs-heading-anchor" href="#A-sparse-Hessian">A sparse Hessian</a><a id="A-sparse-Hessian-1"></a><a class="docs-heading-anchor-permalink" href="#A-sparse-Hessian" title="Permalink"></a></h2><p>The sparse system writes into the prototype&#39;s storage; its symbolic analysis is done once, when the system is built.</p><pre><code class="language-julia-repl hljs">julia&gt; H = spdiagm(-1 =&gt; fill(-1.0, 4), 0 =&gt; fill(2.5, 5), 1 =&gt; fill(-1.0, 4));
+
+julia&gt; ls = makehessiansystem(copy(H), :auto); getb(ls) .= ones(5);
+
+julia&gt; dampen!(ls, 1e-3); solve!(ls, :auto)
+Success::SolveStatus = 0
+
+julia&gt; getx(ls) ≈ (Matrix(H) + 1e-3I) \ ones(5)
+true
+
+julia&gt; max_diag(ls)
+2.5</code></pre><h2 id="A-Jacobian-system"><a class="docs-heading-anchor" href="#A-Jacobian-system">A Jacobian system</a><a id="A-Jacobian-system-1"></a><a class="docs-heading-anchor-permalink" href="#A-Jacobian-system" title="Permalink"></a></h2><p>A Jacobian system holds <code>J</code> and <code>r</code>; the caller writes them, forms <code>b = Jᵀr</code> with <a href="../api/#DampedLinearSolve.gradient!"><code>gradient!</code></a>, and marks the old factorization stale with <a href="../api/#DampedLinearSolve.markstale!"><code>markstale!</code></a>.</p><pre><code class="language-julia-repl hljs">julia&gt; J = [1.0 0.0; 1.0 1.0; 1.0 2.0; 1.0 3.0]; r = [1.0, 2.0, 2.0, 4.0];
+
+julia&gt; ls = makejacobiansystem(4, 2, :auto); A = getA(ls);
+
+julia&gt; getJ(A) .= J; getr(A) .= r; gradient!(getb(ls), A); markstale!(A);
+
+julia&gt; getb(ls) ≈ J&#39; * r
+true
+
+julia&gt; dampen!(ls, 0.0); solve!(ls, :auto)
+Success::SolveStatus = 0
+
+julia&gt; getx(ls) ≈ J \ r                          # the least-squares solution
+true
+
+julia&gt; dampen!(ls, 0.5); solve!(ls, :auto); getx(ls) ≈ (J&#39; * J + 0.5I) \ (J&#39; * r)
+true</code></pre><p>The factorization of <code>J</code> is kept between the two solves: a new damping refactors only an <code>n × n</code> block. A spare system for a trial point comes from <a href="../api/#DampedLinearSolve.copy_structure"><code>copy_structure</code></a>.</p><p>The same system built for <code>:cholesky</code> solves the normal equations instead: it forms <code>JᵀJ</code> once per linearization and factors <code>JᵀJ + λI</code> for each damping. That is cheaper than QR when <code>m</code> is well above <code>n</code>, and squares the condition number of <code>J</code>, so it suits a well-conditioned <code>J</code>.</p><pre><code class="language-julia-repl hljs">julia&gt; ne = makejacobiansystem(4, 2, :cholesky); B = getA(ne);
+
+julia&gt; getJ(B) .= J; getr(B) .= r; gradient!(getb(ne), B); markstale!(B);
+
+julia&gt; dampen!(ne, 0.5); solve!(ne, :cholesky)
+Success::SolveStatus = 0
+
+julia&gt; getx(ne) ≈ getx(ls)                       # the damped solution of the QR-built system
+true</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../damping/">« Damping</a><a class="docs-footer-nextpage" href="../implementing/">Implementing the contract »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.20.0 on <span class="colophon-date" title="Friday 20 November 2026 20:58">Friday 20 November 2026</span>. Using Julia version 1.13.4.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
