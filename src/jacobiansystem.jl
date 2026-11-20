@@ -1,6 +1,7 @@
 # The residual-and-Jacobian linear system: A = JᵀJ held implicitly, b = Jᵀr. Solved by a
 # Householder QR of [J r] once per linearization, then, per damping value, a QR of the small
-# stacked matrix [R q; √λ D^½ 0]. JᵀJ is never formed.
+# stacked matrix [R q; √λ D^½ 0]. With QR (and LSMR) JᵀJ is never formed; the normal-equations
+# solvers, `:cholesky` and `:ldl`, form it once per linearization (jacobiannormalsystem.jl).
 
 # Householder QR of the strided matrix `A` in place (LAPACK `dgeqrf`), with preallocated `tau`
 # and work array, so that it does not allocate
@@ -184,11 +185,12 @@ function max_diag(A::JacobianStorage)
 end
 
 """
-    DenseJacobianLinearSystem(J::Matrix{Float64})
-    DenseJacobianLinearSystem(m::Integer, n::Integer)
+    DenseJacobianLinearSystem(J::Matrix{Float64}; linsolver = :auto)
+    DenseJacobianLinearSystem(m::Integer, n::Integer; linsolver = :auto)
 
 The Jacobian linear system of a residual-and-Jacobian problem: the normal equations `(JᵀJ + λD) x = Jᵀr`,
-with `J` dense (`m × n`, writing into the given matrix, or its own) and `JᵀJ` never formed.
+with `J` dense (`m × n`, writing into the given matrix, or its own) and, with QR (the default) or
+LSMR, `JᵀJ` never formed.
 It meets the [`AbstractLinearSystem`](@ref) interface with `getA(ls)` a [`JacobianStorage`](@ref)
 holding `J` and `r`, and `getb(ls)` the gradient `Jᵀr`.
 
@@ -213,30 +215,54 @@ column norms (and zeroes `b`, which the linearization then overwrites). Code tha
 `DenseJacobianLinearSystem(J)` uses `J` as its storage with the values it holds, as does
 `makejacobiansystem` with a `Matrix` prototype; with an integer `m`, `J` starts as zeros.
 `copy_structure` copies `J`, so a trial system starts with the same entries.
+
+# The normal equations: `:cholesky` and `:ldl`
+
+Built with `linsolver = :cholesky` or `:ldl` (`DenseJacobianLinearSystem(J; linsolver = :cholesky)`,
+or `makejacobiansystem` with that solver), the system solves the normal equations instead: once per
+linearization it forms the upper triangle of `JᵀJ` (BLAS `syrk`, about `mn²/2` multiply-adds), and
+for each damping value it factors `JᵀJ + λD` (`n³/3`, independent of `m`) by Cholesky (`:cholesky`)
+or Bunch–Kaufman (`:ldl`), as the dense Hessian system does, and returns that solve's status
+(`Success`, `NotPositiveDefinite`, or `Indefinite` from `:ldl`). QR costs about `2mn² − 2n³/3` per
+linearization, so the normal equations are cheaper when `m` is well above `n`. Memory: `J` and two
+`n × n` matrices, with no copy of `[J r]`. The product and the factorization are BLAS and LAPACK
+calls, and use their threads.
+
+The normal equations square the condition number of `J`, so they lose accuracy that QR keeps on an
+ill-conditioned `J`; `:auto` is QR. Rank deficiency is reported only as the factorization reports it
+(an exactly or numerically singular `JᵀJ` may still factorize), except that an undamped solve with
+`m < n` returns `NotPositiveDefinite` without factorizing. A `NaN` or `Inf` in `J` or `r` returns
+`NotPositiveDefinite` with `x` set to `NaN`, and forms nothing. [`dampingfloor`](@ref) is
+`eps(Float64)`, as for a factorization of a Hessian. A system is solved with the solver it was built
+for: QR or LSMR asked of a system built for `:cholesky`, or the reverse, is an `ArgumentError`.
 """
 mutable struct DenseJacobianLinearSystem{W} <: AbstractJacobianLinearSystem
     const A::JacobianStorage
     const b::Vector{Float64}      # the gradient Jᵀr
     const x::Vector{Float64}
-    const solver_ws::W            # an iterative solver's workspace (`makejacobianws`), or nothing for QR
+    const solver_ws::W            # the workspace of an iterative solver or of the normal equations (`makejacobianws`), or nothing for QR
     lambda::Float64
     scaling::Union{Nothing, Vector{Float64}}
 end
 function DenseJacobianLinearSystem(J::Matrix{Float64}; linsolver = :auto)
     m, n = size(J)
-    # An iterative solver needs no QR scratch, only its own workspace
-    scratch = needsqr(linsolver) ? JacobianQRScratch(m, n) : JacobianQRScratch(0, n)
-    A = JacobianStorage(J, zeros(m), zeros(m), JacobianQRWorkspace(scratch, n))
+    A = JacobianStorage(J, zeros(m), zeros(m), JacobianQRWorkspace(qrscratch(m, n, linsolver), n))
     return DenseJacobianLinearSystem(A, zeros(n), zeros(n), makejacobianws(m, n, linsolver), 0.0, nothing)
 end
 DenseJacobianLinearSystem(m::Integer, n::Integer; linsolver = :auto) = DenseJacobianLinearSystem(zeros(Float64, m, n); linsolver)
 isfinitesystem(ls::DenseJacobianLinearSystem) = all(isfinite, ls.A.J) && all(isfinite, ls.A.r)
 
-# The solvers of the Jacobian systems: QR (`:auto`, `:qr`) in this package, and those an extension
-# adds through `makejacobianws` (LSMR, in KrylovExt), which builds the solver's workspace
+# The solvers of the Jacobian systems: QR (`:auto`, `:qr`) and, for the dense system, the normal
+# equations (`:cholesky`, `:ldl`, jacobiannormalsystem.jl) in this package, and those an extension adds
+# through `makejacobianws` (LSMR, in KrylovExt), which builds the solver's workspace
 needsqr(linsolver) = linsolver_symbol(linsolver) in (:auto, :qr)
 makejacobianws(m, n, linsolver) = makejacobianws(m, n, static(linsolver_symbol(linsolver)))
 makejacobianws(m, n, ::StaticSymbol) = nothing
+# The QR scratch of the dense system: [J r] and the stacked matrix for QR; an iterative solver keeps
+# only the empty scratch's owner token
+qrscratch(m, n, linsolver) = qrscratch(m, n, static(linsolver_symbol(linsolver)))
+qrscratch(m, n, ::Union{StaticSymbol{:auto}, StaticSymbol{:qr}}) = JacobianQRScratch(m, n)
+qrscratch(m, n, ::StaticSymbol) = JacobianQRScratch(0, n)
 
 # LSMR's stopping tolerances, for LSMR on J (KrylovExt). Starting values, not measured (rules.md 26;
 # improvements.md item 5):
@@ -331,11 +357,11 @@ function backsubstitute!(x::Vector{Float64}, R::Matrix{Float64}, n::Integer)
     return x
 end
 
-function solve!(ls::DenseJacobianLinearSystem, ::Union{StaticSymbol{:auto}, StaticSymbol{:qr}})
+function solve!(ls::DenseJacobianLinearSystem, s::Union{StaticSymbol{:auto}, StaticSymbol{:qr}})
     A = ls.A
     ws = A.ws
     m, n = size(A.J)
-    size(ws.scratch.Jr, 1) == m || solvermismatch(ls, :qr)
+    size(ws.scratch.Jr, 1) == m || solvermismatch(ls, dynamic(s))
     factorized(ws) || factor_jacobian!(A)
     if ws.nonfinite
         fill!(ls.x, NaN)
@@ -377,19 +403,23 @@ function solve!(ls::DenseJacobianLinearSystem, ::Union{StaticSymbol{:auto}, Stat
     return Success
 end
 
+# A solver the system takes but was not built for (the normal equations' are in jacobiannormalsystem.jl)
+# is a mismatch; any other is not supported
 function solve!(ls::DenseJacobianLinearSystem, ::StaticSymbol{S}) where S
-    throw(ArgumentError("linsolver = :$S is not supported by a DenseJacobianLinearSystem; use :auto or :qr."))
+    S in (:cholesky, :ldl) && solvermismatch(ls, S)
+    throw(ArgumentError("linsolver = :$S is not supported by a DenseJacobianLinearSystem; use :auto, :qr, :cholesky or :ldl, or :lsmr with Krylov.jl loaded."))
 end
 
 # QR of J works with cond(J), not cond(JᵀJ) = cond(J)², so a damping down to about eps² times the
-# diagonal of JᵀJ still changes the solve
+# diagonal of JᵀJ still changes the solve (the normal equations' floor is eps: jacobiannormalsystem.jl)
 dampingfloor(ls::AbstractJacobianLinearSystem) = eps(Float64)^2
 
 # The diagonal of JᵀJ, the squared column norms of J (computed once per linearization)
 getdiag!(d::AbstractVector, ls::AbstractJacobianLinearSystem) = copyto!(d, colnorms2!(ls.A))
 
 # The Jacobian prototypes the Jacobian systems are built from: their checks, size and solvers
-const JACOBIAN_SUPPORT = "A Jacobian system is built from a Matrix{Float64} or SparseMatrixCSC{Float64, Int} Jacobian prototype or an integer number of residuals m, with linsolver = :auto or :qr, or :lsmr with Krylov.jl loaded;" *
+const JACOBIAN_SUPPORT = "A Jacobian system is built from a Matrix{Float64} or SparseMatrixCSC{Float64, Int} Jacobian prototype or an integer number of residuals m;" *
+    " each takes linsolver = :auto or :qr, or :lsmr with Krylov.jl loaded, and a Matrix{Float64} prototype or an integer m also takes :cholesky or :ldl (the normal equations, JᵀJ formed from J);" *
     " a package that implements the linear-system contract for its own prototype adds it (BlockLinearSystems.jl adds SchurBlockJacobian)"
 
 # The Jacobian prototype: a Matrix{Float64} with at least one row, or an integer m >= 1
@@ -418,6 +448,9 @@ jacobian_nrows(J) = J isa Integer ? Int(J) : size(J, 1)
 jacobian_ncols(J::AbstractMatrix) = size(J, 2)
 jacobian_ncols(J) = nothing
 function check_jacobian_linsolver(J, s::Symbol)
-    s in (:auto, :qr, :lsmr) || throw(ArgumentError("linsolver = :$s is not supported by the Jacobian system of a $(typeof(J)) Jacobian prototype. $JACOBIAN_SUPPORT."))
-    return nothing
+    s in (:auto, :qr, :lsmr) && return nothing
+    s in (:cholesky, :ldl) && densejacobianprototype(J) && return nothing
+    throw(ArgumentError("linsolver = :$s is not supported by the Jacobian system of a $(typeof(J)) Jacobian prototype. $JACOBIAN_SUPPORT."))
 end
+# The prototypes of the dense Jacobian system, which alone takes the normal-equations solvers
+densejacobianprototype(J) = (J isa Integer && !(J isa Bool)) || J isa Matrix{Float64}

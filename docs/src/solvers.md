@@ -10,7 +10,8 @@ name is available, and [`checklinsolver`](@ref) throws, naming the package to lo
 | static (`MMatrix`, `StaticMatrix`, a `StaticInt` size) | Cholesky | Cholesky | Cholesky, then LU (`Indefinite`) | LU |
 | dense (`Matrix`, an `Int` size) | Cholesky | Cholesky | Bunch–Kaufman (LAPACK `sytrf`, preallocated) | column-pivoted QR of `A` |
 | sparse (`SparseMatrixCSC`) | LDLᵀ (LDLFactorizations, analysed once) | CHOLMOD (analysed once) | LDLᵀ | sparse QR of `A` |
-| Jacobian, dense or static (`Matrix`, an integer `m`) | QR of `[J r]`, then of `[R; √λ D^½]` | | | as `:auto` |
+| Jacobian, dense (`Matrix`, an integer `m`) | QR of `[J r]`, then of `[R; √λ D^½]` | Cholesky of `JᵀJ`, formed once per linearization (BLAS `syrk`) | Bunch–Kaufman of `JᵀJ` | as `:auto` |
+| Jacobian, static (a `StaticInt` `n`, `m·n ≤ 48`) | QR of `[J r]`, then of `[R; √λ D^½]` | | | as `:auto` |
 | Jacobian, sparse (`SparseMatrixCSC{Float64, Int}`) | SPQR of `[J; √λ D^½]` (analysed once) | | | as `:auto` |
 
 With Krylov.jl loaded, `:cg` and `:minres` solve dense and sparse systems (Jacobi preconditioned on a
@@ -26,8 +27,15 @@ of a positive-definite matrix is the cheapest; LDLᵀ for a sparse `A`, which al
 indefinite matrix; and QR of `J` for a Jacobian system, which works with the condition number of `J`
 rather than of `JᵀJ`.
 
+`:auto` never chooses the normal equations of a dense Jacobian system (`:cholesky`, `:ldl`): choose
+them for a well-conditioned `J` with `m` well above `n`, where forming `JᵀJ` (about `mn²/2`
+multiply-adds, once per linearization) and factoring `JᵀJ + λD` (`n³/3` per damping) costs less
+than QR (about `2mn²`). Forming `JᵀJ` squares the condition number of `J`, so on an
+ill-conditioned `J` they lose accuracy that QR keeps; that is why `:auto` does not. A system built
+for them with a static `n` is the dense Jacobian system, never the static one.
+
 ## The static Jacobian system
 
 A Jacobian system with a static number of variables `n` (a `StaticInt`), a dense Jacobian and a QR
-solver is static when `m·n ≤ 48`, a threshold measured against the dense Jacobian system on Julia 1.10
+solver (`:auto` or `:qr`) is static when `m·n ≤ 48`, a threshold measured against the dense Jacobian system on Julia 1.10
 and 1.13 (a starting value, not a tuned one). The caller decides whether `n` is static.

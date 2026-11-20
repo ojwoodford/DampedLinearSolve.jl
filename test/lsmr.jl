@@ -78,5 +78,13 @@ end
         @test isnothing(check_linear_system(make; n, linsolvers = (:lsmr,), rtol = 1e-6))
     end
 
+    @testset "LSMR and the normal equations are each solved only with their own solver" begin
+        for (built, asked, name) in ((:cholesky, :lsmr, ":cholesky"), (:ldl, :lsmr, ":ldl"), (:lsmr, :cholesky, ":lsmr"), (:lsmr, :ldl, ":lsmr"))
+            ls = makejacobiansystem(6, 3, built)
+            err = try solve!(ls, asked); nothing catch e; e end
+            @test err isa ArgumentError && occursin("linsolver = :$asked", err.msg) && occursin("for linsolver = $name", err.msg)
+        end
+    end
+
 
 end

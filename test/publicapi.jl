@@ -57,7 +57,7 @@ const PUBLIC_API = sort([
             :StaticLinearSystem, :DenseLinearSystem, :SparseLinearSystem,
             :DenseJacobianLinearSystem, :SparseJacobianLinearSystem, :StaticJacobianLinearSystem,
             :AbstractJacobianLinearSystem, :JacobianStorage, :SparseJacobianStorage, :StaticJacobianStorage,
-            :MAX_STATIC_JACOBIAN, :fast_dot, :linsolver_symbol, :uniformscaling!, :invsym)
+            :JacobianNormalWorkspace, :MAX_STATIC_JACOBIAN, :fast_dot, :linsolver_symbol, :uniformscaling!, :invsym)
         @test isdefined(DampedLinearSolve, name)
         @test !(name in names(DampedLinearSolve))
     end
