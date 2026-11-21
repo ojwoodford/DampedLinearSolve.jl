@@ -21,8 +21,8 @@ The rules:
 - **Replaced, not accumulated.** Each `dampen!` replaces the damping and scaling set before;
   returning to an earlier damping gives the identical `x`. `λ = 0` is undamped.
 - **Never chosen.** The system does not pick or update `λ`. [`dampingfloor`](@ref) says how small a
-  damping, relative to the diagonal, its solver still resolves: about `eps(Float64)` for a
-  factorization of `A + λD`, and `eps(Float64)^2` for QR of `J`. [`max_diag`](@ref) gives the scale.
+  damping, relative to the diagonal, its solver still resolves: about `eps(T)` for a
+  factorization of `A + λD`, and `eps(T)^2` for QR of `J`, with `T` the system's element type. [`max_diag`](@ref) gives the scale.
 
 ```jldoctest
 julia> ls = makehessiansystem([2.0 0.0; 0.0 8.0], :auto);

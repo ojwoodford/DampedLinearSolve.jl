@@ -160,7 +160,9 @@ can represent. For the Jacobian storage, `JᵀJ` is compared with the test matri
 (then exactly with itself), the indefinite-`A` checks are skipped, and when `m < n` the test
 matrix has rank `m`, the undamped solve must not return `Success`, and the solves that are
 otherwise undamped use a damping of `0.25`. Solutions are compared with `rtol`; use a looser
-value for iterative solvers.
+value for iterative solvers. `rtol` and the round trip's `1e-10` are stated for a `Float64` system: a system
+of element type `T` ([`systemeltype`](@ref)) is held to them times `eps(T)/eps(Float64)`, and an exact
+storage's round trip gives the test matrix rounded to `T`.
 
 The rules, for each solver:
 - `getA`, `getb`, `getx` have dimension `n`.
@@ -196,10 +198,15 @@ function check_linear_system(make_ls; n::Integer, linsolvers, rtol::Real = 1e-8)
     return nothing
 end
 
-function check_linear_system_solver(make_ls, n, s, rtol)
+# A tolerance stated for Float64, for a system of element type T: in proportion to eps(T)
+precision_tolerance(tol, ::Type{T}) where T = tol * (Float64(eps(T)) / eps(Float64))
+
+function check_linear_system_solver(make_ls, n, s, rtol64)
     # Test data inside the system's pattern: fill a symmetric matrix, read back what was kept, and
     # make it diagonally dominant (so symmetric positive definite)
     ls = applicable(make_ls, s) ? make_ls(s) : make_ls()
+    T = systemeltype(ls)
+    rtol = precision_tolerance(rtol64, T)
     length(getb(ls)) == n || conformance_error("getb has length n", s, "got $(length(getb(ls))), n = $n")
     length(getx(ls)) == n || conformance_error("getx has length n", s, "got $(length(getx(ls))), n = $n")
     traits = conformance_traits(getA(ls))
@@ -225,13 +232,14 @@ function check_linear_system_solver(make_ls, n, s, rtol)
     base = deficient ? "solve with base damping" : "undamped solve"
 
     ls = conformance_system(make_ls, s, Q, b)
-    Qw = conformance_matrix(getA(ls))   # what the storage holds: Q itself when the storage is exact
+    Qw = conformance_matrix(getA(ls))   # what the storage holds: Q itself (rounded to T) when the storage is exact
     if traits.exact
-        Qw == Q || conformance_error("conformance_fill! and conformance_matrix round-trip", s,
-            "the test matrix lies inside the pattern, so writing and reading it back must give it unchanged")
+        Qw == T.(Q) || conformance_error("conformance_fill! and conformance_matrix round-trip", s,
+            "the test matrix lies inside the pattern, so writing and reading it back must give it unchanged (rounded to the system's element type, $T)")
     else
-        relerr(Qw, Q) <= 1e-10 || conformance_error("conformance_fill! and conformance_matrix round-trip", s,
-            "the test matrix lies inside the pattern, so writing and reading it back must give it to a relative 1e-10; got $(relerr(Qw, Q))")
+        tol = precision_tolerance(1e-10, T)
+        relerr(Qw, Q) <= tol || conformance_error("conformance_fill! and conformance_matrix round-trip", s,
+            "the test matrix lies inside the pattern, so writing and reading it back must give it to a relative $tol; got $(relerr(Qw, Q))")
     end
 
     # A singular A is not solved as definite
@@ -344,7 +352,7 @@ function check_linear_system_solver(make_ls, n, s, rtol)
         status = solve!(lsi, s)
         s === :cholesky && status == Success && conformance_error("an indefinite A is not solved as positive definite by :cholesky", s)
         s === :ldl && status != Indefinite && conformance_error("an indefinite A gives Indefinite from :ldl", s, "got $status")
-        conformance_matrix(getA(lsi)) == Qi || conformance_error("solve! leaves A as it was written", s, "after a solve of an indefinite A")
+        conformance_matrix(getA(lsi)) == T.(Qi) || conformance_error("solve! leaves A as it was written", s, "after a solve of an indefinite A")
     end
     return nothing
 end

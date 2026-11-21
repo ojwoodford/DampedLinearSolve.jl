@@ -195,14 +195,17 @@ function max_diag(A::JacobianStorage)
 end
 
 """
-    DenseJacobianLinearSystem(J::Matrix{Float64}; linsolver = :auto)
+    DenseJacobianLinearSystem(J::Matrix{T}; linsolver = :auto)
     DenseJacobianLinearSystem(m::Integer, n::Integer; linsolver = :auto)
 
 The Jacobian linear system of a residual-and-Jacobian problem: the normal equations `(JᵀJ + λD) x = Jᵀr`,
 with `J` dense (`m × n`, writing into the given matrix, or its own) and, with QR (the default) or
 LSMR, `JᵀJ` never formed.
 It meets the [`AbstractLinearSystem`](@ref) interface with `getA(ls)` a [`JacobianStorage`](@ref)
-holding `J` and `r`, and `getb(ls)` the gradient `Jᵀr`.
+holding `J` and `r`, and `getb(ls)` the gradient `Jᵀr`. `J`'s element type `T` (`Float64` or `Float32`;
+`Float64` with an integer `m`) is the system's: the factorizations and their scratch are in `T`, `r` narrowed
+into them, while `r`, `b` and `x` are `Float64`. The factorization is of `[J S r]`, `S` the conditioning
+scale, and `x = S y` is returned (the contract's "Conditioning").
 
 `solve!(ls, :auto)` (or `:qr`) factors `[J r]` by Householder QR once per linearization
 (`O(mn²)`), and then, for each damping value, factors the `2n × n` stacked matrix
@@ -243,7 +246,7 @@ ill-conditioned `J`; `:auto` is QR. Rank deficiency is reported only as the fact
 (an exactly or numerically singular `JᵀJ` may still factorize), except that an undamped solve with
 `m < n` returns `NotPositiveDefinite` without factorizing. A `NaN` or `Inf` in `J` or `r` returns
 `NotPositiveDefinite` with `x` set to `NaN`, and forms nothing. [`dampingfloor`](@ref) is
-`eps(Float64)`, as for a factorization of a Hessian. A system is solved with the solver it was built
+`eps(T)`, as for a factorization of a Hessian. A system is solved with the solver it was built
 for: QR or LSMR asked of a system built for `:cholesky`, or the reverse, is an `ArgumentError`.
 """
 mutable struct DenseJacobianLinearSystem{W, T} <: AbstractJacobianLinearSystem

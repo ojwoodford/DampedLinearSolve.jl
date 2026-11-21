@@ -189,7 +189,7 @@ function max_diag(A::SparseJacobianStorage)
 end
 
 """
-    SparseJacobianLinearSystem(J::SparseMatrixCSC{Float64, Int})
+    SparseJacobianLinearSystem(J::SparseMatrixCSC{T, Int})
 
 The Jacobian linear system of a residual-and-Jacobian problem with a sparse Jacobian prototype: the normal
 equations `(JᵀJ + λD) x = Jᵀr`, with `JᵀJ` never formed. `getA(ls)` is a

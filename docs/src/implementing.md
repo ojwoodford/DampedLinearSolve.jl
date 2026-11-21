@@ -22,7 +22,8 @@ For a system type `MySystem`:
 3. **Damping and solving**: [`dampen!`](@ref) with both signatures, and [`solve!`](@ref) for each
    solver you accept, returning a [`SolveStatus`](@ref), leaving `A` and `b` as filled.
 4. **Queries**: [`max_diag`](@ref), [`getdiag!`](@ref), [`quadform`](@ref) for your storage (or a
-   three-argument `LinearAlgebra.dot`), [`dampingfloor`](@ref) and [`isfinitesystem`](@ref).
+   three-argument `LinearAlgebra.dot`), [`dampingfloor`](@ref), [`isfinitesystem`](@ref) and, for a
+   system that can be held in `Float32`, [`systemeltype`](@ref) (a system without a method is `Float64`).
    [`quadratic_model_change`](@ref) has a generic method built on `quadform` and `getb`.
 5. **The spare system**: [`copy_structure`](@ref) and [`sharex`](@ref).
 6. **The conformance hooks**, for storage other than a `Matrix`, `MMatrix` or `SparseMatrixCSC`:

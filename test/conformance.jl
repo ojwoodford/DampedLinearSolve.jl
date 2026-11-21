@@ -34,6 +34,21 @@ DLS.zero!(w::BrokenSystem) = (w.broken === :zero_keeps_b ? fill!(w.inner.A, 0.0)
 DLS.dampingfloor(w::BrokenSystem) = w.broken === :floor_zero ? 0.0 : DLS.dampingfloor(w.inner)
 DLS.max_diag(w::BrokenSystem) = w.broken === :max_diag_skips_nan ? maximum(x -> isnan(x) ? 0.0 : abs(x), diag(w.inner.A)) : DLS.max_diag(w.inner)
 
+# A system that forwards to another and reports its element type as Float64
+struct ClaimsFloat64{S} <: DLS.AbstractLinearSystem
+    inner::S
+end
+for f in (:getA, :getb, :getx, :max_diag, :dampingfloor, :isfinitesystem)
+    @eval DLS.$f(w::ClaimsFloat64) = DLS.$f(w.inner)
+end
+DLS.solve!(w::ClaimsFloat64, s) = DLS.solve!(w.inner, s)
+DLS.dampen!(w::ClaimsFloat64, λ::Real) = (DLS.dampen!(w.inner, λ); w)
+DLS.dampen!(w::ClaimsFloat64, λ::Real, sc) = (DLS.dampen!(w.inner, λ, sc); w)
+DLS.zero!(w::ClaimsFloat64) = (DLS.zero!(w.inner); w)
+DLS.copy_structure(w::ClaimsFloat64) = ClaimsFloat64(DLS.copy_structure(w.inner))
+DLS.sharex(w::ClaimsFloat64, from) = ClaimsFloat64(DLS.sharex(w.inner, from.inner))
+DLS.systemeltype(::ClaimsFloat64) = Float64
+
 checker_message(make_ls; kwargs...) = try check_linear_system(make_ls; kwargs...); nothing catch e; e end
 
 @testset "conformance.jl" begin
@@ -86,6 +101,24 @@ checker_message(make_ls; kwargs...) = try check_linear_system(make_ls; kwargs...
         else
             @test_skip "Pardiso library not available"
         end
+    end
+
+    # A Float32 system, held to the tolerances in proportion to eps(Float32) (single-precision.md, SP-D6)
+    @testset "Float32 systems" begin
+        n = 6
+        pattern = spdiagm(-2 => ones(n - 2), -1 => ones(n - 1), 0 => ones(n), 1 => ones(n - 1), 2 => ones(n - 2))
+        sparse32 = Float32 <: SparseArrays.CHOLMOD.VTypes ? (:auto, :cholesky, :ldl) : (:auto, :ldl)
+        @test check_linear_system(s -> DLS.makehessiansystem(zeros(MMatrix{n, n, Float32}), s); n, linsolvers=solvers) === nothing
+        @test check_linear_system(s -> DLS.makehessiansystem(zeros(Float32, n, n), s); n, linsolvers=solvers) === nothing
+        @test check_linear_system(() -> DLS.DenseLinearSystem{Float32}(zeros(Float32, n, n), zeros(n), zeros(n)); n, linsolvers=solvers) === nothing
+        @test check_linear_system(s -> DLS.makehessiansystem(SparseMatrixCSC{Float32, Int}(pattern), s); n, linsolvers=sparse32) === nothing
+        for m in (9, 4)
+            @test check_linear_system(s -> DLS.makejacobiansystem(zeros(Float32, m, n), n, s); n, linsolvers=(:auto, :qr, :cholesky, :ldl)) === nothing
+        end
+        @test check_linear_system(s -> DLS.makejacobiansystem(zeros(Float32, 6, 3), static(3), s); n=3, linsolvers=(:auto, :qr)) === nothing
+        # The check is not weakened for Float64: a Float32 system that says it is Float64 fails it
+        err = checker_message(() -> ClaimsFloat64(DLS.DenseLinearSystem{Float32}(zeros(Float32, n, n), zeros(n), zeros(n))); n, linsolvers=(:cholesky,))
+        @test err isa ErrorException && occursin("round-trip", err.msg)
     end
 
     @testset "The checker catches broken systems" begin
