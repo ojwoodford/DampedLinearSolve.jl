@@ -139,11 +139,15 @@ do: there is no silent substitution, `:auto` included. Checked by building and s
 | System | Offers `Float32` | Does not |
 |---|---|---|
 | static | `:auto`, `:cholesky`, `:ldl`, `:qr` (StaticArrays) | |
-| dense | `:auto`, `:cholesky`, `:ldl`, `:qr` (LAPACK) | `:pardiso` |
-| sparse | `:auto`, `:ldl` (LDLFactorizations); `:cholesky` (CHOLMOD) from SparseArrays 1.13, which factorizes single precision | `:cholesky` on SparseArrays 1.10 (which converts to `Float64`); `:qr` (SPQR converts to `Float64` on both); `:pardiso` |
-| Jacobian, dense | `:auto`, `:qr` (LAPACK QR), `:cholesky`, `:ldl` (BLAS `syrk`, LAPACK) | |
+| dense | `:auto`, `:cholesky`, `:ldl`, `:qr` (LAPACK); `:cg`, `:minres` (Krylov.jl) | `:pardiso` |
+| sparse | `:auto`, `:ldl` (LDLFactorizations); `:cholesky` (CHOLMOD) from SparseArrays 1.13, which factorizes single precision; `:cg`, `:minres` | `:cholesky` on SparseArrays 1.10 (which converts to `Float64`); `:qr` (SPQR converts to `Float64` on both); `:pardiso` |
+| Jacobian, dense | `:auto`, `:qr` (LAPACK QR), `:cholesky`, `:ldl` (BLAS `syrk`, LAPACK); `:lsmr` | |
 | Jacobian, static | `:auto`, `:qr` | |
-| Jacobian, sparse | | `:auto`, `:qr` (SPQR) |
+| Jacobian, sparse | `:lsmr` | `:auto`, `:qr` (SPQR) |
+
+The Krylov solvers run in `T` (their vectors in `T`, `b` or `r` narrowed into them), with their tolerances
+`√eps(T)` (LSMR's `conlim` `1/√eps(T)`). `:pardiso` is not offered for `Float32`: it could not be checked,
+neither MKL nor Panua Pardiso being available on the machine this was built on.
 
 The tolerances that compare with rounding in the matrix follow `T`: [`dampingfloor`](@ref) is `eps(T)` or
 `eps(T)^2`, the rank tests of the Jacobian QR use `eps(T)`, and the indefiniteness test of `:ldl` counts a

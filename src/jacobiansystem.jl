@@ -149,7 +149,7 @@ function quadform(A::JacobianStorage, v::AbstractVector)
 end
 
 # g = Jᵀ r as one dot product per column of J: a plain loop, not BLAS gemv (rules.md 23)
-function jtr!(g::AbstractVector, J::Matrix{<:Union{Float64, Float32}}, r::Vector{Float64})
+function jtr!(g::AbstractVector, J::Matrix{<:Union{Float64, Float32}}, r::AbstractVector)
     m, n = size(J)
     @inbounds for j in 1:n
         total = 0.0
@@ -283,10 +283,11 @@ qrscratch(m, n, ::StaticSymbol, ::Type{T}) where T = JacobianQRScratch{T}(0, n)
 # improvements.md item 5):
 # Krylov's own defaults, stated here so that a change in Krylov does not change them. itmax is Krylov's
 # default, m + n iterations.
-const LSMR_ETOL = sqrt(eps(Float64))     # stopping on the normal-equation residual
-const LSMR_AXTOL = sqrt(eps(Float64))
-const LSMR_BTOL = sqrt(eps(Float64))
-const LSMR_CONLIM = 1 / sqrt(eps(Float64))
+# In the element type T of the system LSMR runs in: √eps(T) for the three stopping tolerances (etol, on the
+# normal-equation residual; axtol; btol) and 1/√eps(T) for conlim. For Float64 these are the former constants; for
+# Float32 they follow the rule for a constant about the matrix's precision (single-precision.md), and are starting
+# values too.
+lsmr_tolerances(::Type{T}) where T = (sqrt(eps(T)), sqrt(eps(T)), sqrt(eps(T)), 1 / sqrt(eps(T)))
 
 # The Jacobian system of `n` variables for the Jacobian prototype `J`. A Matrix prototype is the storage
 # resjac! writes into, used with the values it holds: entries resjac! never writes keep the caller's

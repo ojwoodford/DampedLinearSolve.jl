@@ -151,7 +151,7 @@ function quadform(A::SparseJacobianStorage, v::AbstractVector)
 end
 
 # g = Jᵀ r, one sparse dot product per column (rules.md 23)
-function jtr!(g::AbstractVector, J::SparseMatrixCSC{<:Union{Float64, Float32}, Int}, r::Vector{Float64})
+function jtr!(g::AbstractVector, J::SparseMatrixCSC{<:Union{Float64, Float32}, Int}, r::AbstractVector)
     rv, nzv = rowvals(J), nonzeros(J)
     @inbounds for j in axes(J, 2)
         total = 0.0
