@@ -16,7 +16,7 @@ each rule.
 | [`getJ`](@ref), [`getr`](@ref), [`gradient!`](@ref), [`markstale!`](@ref) | A Jacobian system's storage: `J` and `r`, `b = Jᵀr`, and "`J` or `r` was written". |
 | [`dampen!`](@ref) | Records `λI` or `λ·Diagonal(s)`, applied only inside `solve!`. |
 | [`solve!`](@ref) | Solves the damped system into `x`, leaving `A` and `b` as filled; returns a [`SolveStatus`](@ref). |
-| [`max_diag`](@ref), [`getdiag!`](@ref), [`quadform`](@ref), [`quadratic_model_change`](@ref), [`dampingfloor`](@ref), [`isfinitesystem`](@ref) | Queries on the undamped system. |
+| [`max_diag`](@ref), [`getdiag!`](@ref), [`quadform`](@ref), [`quadratic_model_change`](@ref), [`dampingfloor`](@ref), [`isfinitesystem`](@ref), [`systemeltype`](@ref) | Queries on the undamped system, and its element type. |
 | [`copy_structure`](@ref), [`sharex`](@ref) | A spare system of the same structure, and sharing `x` with another. |
 """
 AbstractLinearSystem
@@ -331,12 +331,25 @@ quadratic_model_change
 """
     dampingfloor(ls) -> Float64
 
-The smallest damping the system's solver resolves, relative to the diagonal: `eps(Float64)` for a
+The smallest damping the system's solver resolves, relative to the diagonal: `eps(T)` for a
 factorization of `A + λD`, including a dense Jacobian system built for `:cholesky` or `:ldl` (which
-factors `JᵀJ + λD`), and `eps(Float64)^2` for a Jacobian system solved by QR of `J` (or LSMR), which
-works with the condition number of `J`.
+factors `JᵀJ + λD`), and `eps(T)^2` for a Jacobian system solved by QR of `J` (or LSMR), which
+works with the condition number of `J`. `T` is the system's element type ([`systemeltype`](@ref)); the
+value is a `Float64` either way.
 """
 dampingfloor
+
+"""
+    systemeltype(ls) -> Type
+
+The element type of the linear system: the type its matrix (`A`, or `J` of a Jacobian system) and every
+copy, reduction and factorization of it are held in, `Float64` or `Float32`. It is the element type of the
+prototype the system was built from (`Float64` for a system built from a number of variables or residuals).
+`b`, `x`, `r`, the damping and every query's result are `Float64` whatever it is. An optimizer reads it to
+set the tolerances that depend on the precision of the matrix, such as its damping floor. A system of
+another package that does not implement it is taken to be `Float64`.
+"""
+systemeltype
 
 """
     isfinitesystem(ls) -> Bool

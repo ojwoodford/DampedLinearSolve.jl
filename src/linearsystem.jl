@@ -88,6 +88,10 @@ function SparseLinearSystem(A::SparseMatrixCSC{T, Ti}, b::Vector{Float64}, x::Ve
                                           Vector{Float64}(undef, n), condition, 0.0, nothing)
 end
 
+systemeltype(::StaticLinearSystem{N, N2, T}) where {N, N2, T} = T
+systemeltype(::DenseLinearSystem{T}) where T = T
+systemeltype(::SparseLinearSystem{T}) where T = T
+
 function ensure_diag_and_inds(A::SparseMatrixCSC{T, Ti}) where {T, Ti}
     @assert A.m == A.n "Hessian matrix must be square"
     n = A.n
@@ -336,8 +340,8 @@ end
 
 # The smallest damping the solver resolves, relative to the diagonal: below about eps times the
 # diagonal, Cholesky of A + λD no longer sees the damping. The Jacobian system, solved by QR of J,
-# tolerates about eps² (see jacobiansystem.jl).
-dampingfloor(ls) = eps(Float64)
+# tolerates about eps² (see jacobiansystem.jl). eps of the system's element type; a Float64.
+dampingfloor(ls) = Float64(eps(systemeltype(ls)))
 
 # Change in the undamped quadratic model, 0.5 dx'H dx + g'dx, for a step dx (negative for a
 # descent step)

@@ -227,3 +227,35 @@ sp_fill!(ls, J32, r) = (getJ(getA(ls)) .= J32; getr(getA(ls)) .= r; gradient!(ge
         @test makejacobiansystem(m, n, :auto) isa DLS.DenseJacobianLinearSystem{<:Any, Float64}
     end
 end
+
+@testset "precision.jl: the element type and the constants that depend on it" begin
+    A = sp_matrix(4); J = sp_jacobian(6, 4)
+    for T in (Float64, Float32)
+        for ls in (makehessiansystem(T.(A), :auto), makehessiansystem(sparse(T.(A)), :auto), makehessiansystem(MMatrix{4, 4}(T.(A)), :auto),
+                   makejacobiansystem(T.(J), 4, :qr), makejacobiansystem(T.(J), 4, :cholesky), makejacobiansystem(T.(J), static(4), :qr))
+            @test systemeltype(ls) === T
+            @test systemeltype(copy_structure(ls)) === T
+        end
+        # dampingfloor: eps(T) for a factorization of A + λD, eps(T)² for QR of J; always a Float64
+        @test dampingfloor(makehessiansystem(T.(A), :ldl)) === Float64(eps(T))
+        @test dampingfloor(makehessiansystem(sparse(T.(A)), :ldl)) === Float64(eps(T))
+        @test dampingfloor(makejacobiansystem(T.(J), 4, :cholesky)) === Float64(eps(T))
+        @test dampingfloor(makejacobiansystem(T.(J), 4, :qr)) === Float64(eps(T))^2
+        @test dampingfloor(makejacobiansystem(T.(J), static(4), :qr)) === Float64(eps(T))^2
+    end
+    @test systemeltype(makehessiansystem(3, :auto)) === Float64 && systemeltype(makejacobiansystem(6, 3, :qr)) === Float64
+    @test systemeltype(nothing) === Float64   # a system that does not say
+    @test systemeltype(DLS.SparseJacobianLinearSystem(sparse(Float32.(J)); linsolver = :not_a_solver)) === Float32
+    # The indefiniteness tolerance: 1e-6 in Float64, eps(Float32)^(3/8) in Float32 (a starting value)
+    @test DLS.indefinite_rtol(Float64) === 1e-6
+    @test DLS.indefinite_rtol(Float32) ≈ Float64(eps(Float32))^(3 / 8)
+    @test DLS.precision_literal(1e-8, Float32) ≈ Float64(eps(Float32))^(1 / 2)
+    # A pivot between the two tolerances: negative to Float64's test, rounding to Float32's
+    Ai = Float32[1 0; 0 -1e-4]
+    bk = bunchkaufman(Symmetric(Ai))
+    @test !DLS.is_indefinite(bk) && DLS.is_indefinite(bunchkaufman(Symmetric(Float64.(Ai))))
+    @test DLS.is_indefinite(bk, 1e-6)
+    # The rank test of the Jacobian QR: relative to eps of R's element type
+    R = Float32[1 0; 0 1e-7]   # below 2·eps(Float32), above 2·eps(Float64)
+    @test !DLS.fullrank_upper(R, 2) && DLS.fullrank_upper(Float64.(R), 2)
+end

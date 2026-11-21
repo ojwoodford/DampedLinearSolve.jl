@@ -23,7 +23,7 @@ export checkhessian, checkjacobian, check_jacobian_linsolver, jacobian_ncols, ja
 export checklinsolver, validatelinsolver
 export getA, getb, getx, zero!, getJ, getr, gradient!, markstale!
 export dampen!, solve!
-export max_diag, getdiag!, quadform, quadratic_model_change, dampingfloor, isfinitesystem
+export max_diag, getdiag!, quadform, quadratic_model_change, dampingfloor, isfinitesystem, systemeltype
 export copy_structure, sharex
 export check_linear_system, conformance_matrix, conformance_fill!, conformance_fillb!, conformance_traits
 

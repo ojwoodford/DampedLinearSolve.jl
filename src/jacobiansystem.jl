@@ -367,11 +367,12 @@ function factor_jacobian!(A::JacobianStorage{T}, condition::Bool) where T
 end
 
 # Numerical full rank of the n×n upper triangle stored in the top of the factored `R` (of
-# size(R, 1) rows): the smallest |R[i,i]| must exceed max(rows, n)·eps times the largest. A
+# size(R, 1) rows): the smallest |R[i,i]| must exceed max(rows, n)·eps times the largest, with eps that of R's
+# element type. A
 # threshold of n·eps alone misses an exactly duplicated column of a J with more rows than columns, whose R[i,i] is left
 # at the rounding error of the Householder reflections, which grows with the number of rows.
 function fullrank_upper(R::Matrix, n::Integer)
-    tol = max(size(R, 1), n) * eps(Float64)
+    tol = max(size(R, 1), n) * Float64(eps(eltype(R)))
     maxabs = 0.0
     minabs = Inf
     @inbounds for i in 1:n
@@ -461,7 +462,8 @@ end
 
 # QR of J works with cond(J), not cond(JᵀJ) = cond(J)², so a damping down to about eps² times the
 # diagonal of JᵀJ still changes the solve (the normal equations' floor is eps: jacobiannormalsystem.jl)
-dampingfloor(ls::AbstractJacobianLinearSystem) = eps(Float64)^2
+dampingfloor(ls::AbstractJacobianLinearSystem) = Float64(eps(systemeltype(ls)))^2
+systemeltype(::DenseJacobianLinearSystem{W, T}) where {W, T} = T
 
 # The diagonal of JᵀJ, the squared column norms of J (computed once per linearization)
 getdiag!(d::AbstractVector, ls::AbstractJacobianLinearSystem) = copyto!(d, colnorms2!(ls.A))

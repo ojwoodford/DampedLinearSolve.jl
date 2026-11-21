@@ -120,6 +120,7 @@ function StaticJacobianLinearSystem(J::MMatrix{M, N, T}) where {M, N, T}
     return StaticJacobianLinearSystem{M, N, M * N, K, K * N, T}(StaticJacobianStorage(J), zeros(MVector{N, Float64}), zeros(MVector{N, Float64}),
                                                         zeros(MMatrix{K, N, T, K * N}), zeros(MVector{K, T}), false, 0.0, nothing)
 end
+systemeltype(::StaticJacobianLinearSystem{M, N, MN, K, KN, T}) where {M, N, MN, K, KN, T} = T
 isfinitesystem(ls::StaticJacobianLinearSystem) = all(isfinite, ls.A.J) && all(isfinite, ls.A.r)
 StaticJacobianLinearSystem(J::Matrix{T}) where T = StaticJacobianLinearSystem(MMatrix{size(J, 1), size(J, 2), T}(J))
 
@@ -149,7 +150,7 @@ end
 
 # Numerical full rank of the N×N upper triangle of R, as `fullrank_upper` decides for the dense system
 @inline function static_fullrank(R::StaticMatrix, rows::Integer, n::Integer)
-    tol = max(rows, n) * eps(Float64)
+    tol = max(rows, n) * Float64(eps(eltype(R)))
     maxabs, minabs = 0.0, Inf
     @inbounds for i in 1:n
         d = abs(R[i, i])

@@ -149,15 +149,23 @@ const CD_DAMPINGS = ((0.0, nothing), (0.37, nothing), (2.9, [1.0 + i / CD_N for 
                 @test getx(off) == getx(on)   # observed: no difference
             end
         end
-        # The Jacobian of the same scaling (columns scaled from 1e-6 to 1e6): every solver meets it, on or off, in either type
+        # The Jacobian of the same scaling (columns scaled from 1e-6 to 1e6): every solver meets it with conditioning on, in
+        # either type. Off, the Float32 QR's rank test (relative to eps(Float32) times the largest |R_ii|) reads the
+        # unscaled R, whose diagonal spans 1e12, as rank deficient (observed); conditioned, R is nearly equilibrated
+        jtol(T) = 8 * CD_N * eps(T) * cond(J64)^2
         Jbad = J64 * D
         jref = Jbad \ r
         for T in (Float64, Float32), (make, s) in cd_jacobian_cases(T)
             on, off = DLS.jacobiansystem(make(Jbad), CD_N, s, true), DLS.jacobiansystem(make(Jbad), CD_N, s, false)
             cd_fillj!(on, Jbad, r); cd_fillj!(off, Jbad, r)
-            @test solve!(on, s) == Success && solve!(off, s) == Success
-            @test cd_relcomp(getx(on), jref) <= 8 * CD_N * eps(T) * cond(J64)^2
-            @test cd_relcomp(getx(off), jref) <= 8 * CD_N * eps(T) * cond(J64)^2
+            @test solve!(on, s) == Success
+            @test cd_relcomp(getx(on), jref) <= jtol(T)
+            if T === Float32 && s in (:auto, :qr)
+                @test solve!(off, s) == NotPositiveDefinite
+            else
+                @test solve!(off, s) == Success
+                @test cd_relcomp(getx(off), jref) <= jtol(T)
+            end
         end
     end
 

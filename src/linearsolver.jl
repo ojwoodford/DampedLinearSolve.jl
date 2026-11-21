@@ -41,7 +41,8 @@ end
 checklinsolver(s::StaticSymbol) = checklinsolver(dynamic(s))
 
 # Indefiniteness tests on a factorization's pivots. A pivot counts as negative when it is below
-# `-rtol` times the largest pivot magnitude, so the test is independent of the matrix's scale.
+# `-rtol` times the largest pivot magnitude, so the test is independent of the matrix's scale. `rtol` is 1e-6 for a
+# Float64 factorization and its single-precision counterpart for Float32 (`indefinite_rtol`, precision.jl).
 
 # Eigenvalues of the symmetric 2x2 block [a b; b c], smallest first
 @inline function eig2x2(a, b, c)
@@ -54,7 +55,7 @@ end
 # straight from the packed factor `LD` and pivots `ipiv` as LAPACK's `sytrf` leaves them: a
 # negative `ipiv[k]` starts a 2x2 block at (k, k+1), whose off-diagonal entry is stored in the
 # triangle `uplo`. Reading the packed factor avoids materialising `bk.D`.
-function is_indefinite_packed(LD::AbstractMatrix, ipiv::AbstractVector, uplo::Char, rtol::Float64=1e-6)
+function is_indefinite_packed(LD::AbstractMatrix, ipiv::AbstractVector, uplo::Char, rtol::Float64=indefinite_rtol(eltype(LD)))
     n = length(ipiv)
     # The largest pivot magnitude, and the smallest pivot (eigenvalue, for 2x2 blocks)
     maxabs = 0.0
@@ -77,7 +78,7 @@ function is_indefinite_packed(LD::AbstractMatrix, ipiv::AbstractVector, uplo::Ch
     return minpivot < -rtol * maxabs
 end
 
-function is_indefinite(bk::BunchKaufman, rtol::Float64=1e-6)
+function is_indefinite(bk::BunchKaufman, rtol::Float64=indefinite_rtol(eltype(bk)))
     bk.rook || return is_indefinite_packed(bk.LD, bk.ipiv, bk.uplo, rtol)
     # Rook pivoting stores its pivots differently, so go through `bk.D`, materialised once
     # (it rebuilds the block-diagonal matrix on every access)
@@ -102,7 +103,7 @@ function is_indefinite(bk::BunchKaufman, rtol::Float64=1e-6)
     return minpivot < -rtol * maxabs
 end
 
-function is_indefinite(F::LDLFactorizations.LDLFactorization, rtol::Float64=1e-6)
+function is_indefinite(F::LDLFactorizations.LDLFactorization, rtol::Float64=indefinite_rtol(eltype(F.d)))
     maxabs = 0.0
     minpivot = Inf
     @inbounds for d in F.d

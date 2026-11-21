@@ -232,6 +232,7 @@ function SparseJacobianLinearSystem(J::SparseMatrixCSC{T, Int}; linsolver = :aut
 end
 
 makejacobiansystem(J::SparseMatrixCSC, n, linsolver) = jacobiansystem(J, n, linsolver, true)
+systemeltype(::SparseJacobianLinearSystem{W, T}) where {W, T} = T
 function jacobiansystem(J::SparseMatrixCSC{T, Int}, n, linsolver, condition::Bool) where T
     check_eltype(T, "The sparse Jacobian prototype")
     check_offers(T, :jacobian_sparse, linsolver)

@@ -77,4 +77,4 @@ solve!(ls::DenseJacobianLinearSystem{<:JacobianNormalWorkspace{:ldl}}, s::Static
 
 # The normal equations work with cond(JᵀJ) = cond(J)², so, as for a factorization of the Hessian, a
 # damping below about eps times the diagonal is not resolved
-dampingfloor(ls::NormalJacobianSystem) = eps(Float64)
+dampingfloor(ls::NormalJacobianSystem) = Float64(eps(systemeltype(ls)))

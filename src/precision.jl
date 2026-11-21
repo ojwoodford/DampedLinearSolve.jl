@@ -4,6 +4,18 @@
 # The element types a system can be built in; any other is an ArgumentError when the system is built (rules.md 3).
 const SYSTEM_ELTYPES = (Float64, Float32)
 
+# The element type of a system: the type its matrix is stored and factorized in. A system that does not say is
+# Float64 (every system of this package says; another package's says too, BlockLinearSystems' among them).
+systemeltype(ls) = Float64   # each system type has a method beside its definition
+
+# A tolerance about the precision of the matrix (compared with rounding in A or J): the literal, for Float64; for
+# another element type T, eps(T)^p with p = log(literal)/log(eps(Float64)) rounded to a multiple of 1/8, so that
+# 1e-6 gives eps(Float32)^(3/8) ≈ 2.5e-3. Starting values for Float32 (rules.md 26), not measured.
+precision_literal(lit::Float64, ::Type{Float64}) = lit
+precision_literal(lit::Float64, ::Type{T}) where T = Float64(eps(T))^(round(8 * log(lit) / log(eps(Float64))) / 8)
+# The relative pivot tolerance of the indefiniteness tests (1e-6 in Float64)
+indefinite_rtol(::Type{T}) where T = precision_literal(1e-6, T)
+
 function check_eltype(::Type{T}, what::AbstractString) where T
     T in SYSTEM_ELTYPES || throw(ArgumentError("$what has element type $T; a linear system is built in Float64 or Float32 (the element type of the prototype)."))
     return nothing

@@ -38,6 +38,7 @@ const PUBLIC_API = sort([
     :quadform,
     :quadratic_model_change,
     :sharex,
+    :systemeltype,
     :solve!,
     :structurekey,
     :validatelinsolver,

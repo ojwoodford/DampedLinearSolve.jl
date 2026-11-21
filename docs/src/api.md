@@ -55,6 +55,7 @@ quadform
 quadratic_model_change
 dampingfloor
 isfinitesystem
+systemeltype
 ```
 
 ## The spare system
