@@ -32,33 +32,40 @@ StaticLinearSystem{N}() where N = StaticLinearSystem{N, Float64}()
 # Dense linear system. `solver_ws` holds preallocated factorization or Krylov workspaces
 # (`nothing` when the solver needs none), built by `makedensews`. `rhs` (length n, in `T`) holds the
 # right-hand side of the factorized system and then its solution.
+# `cs` is the conditioning scale of the last solve and `condition` the internal switch (conditioning.jl).
 mutable struct DenseLinearSystem{T, W} <: AbstractLinearSystem
     const A::Matrix{T}
     const b::Vector{Float64}
     const x::Vector{Float64}
     const A_scratch::Matrix{T}
     const rhs::Vector{T}
+    const cs::Vector{Float64}
+    const condition::Bool
     const solver_ws::W
     lambda::Float64
     scaling::Union{Nothing, Vector{Float64}}
 end
-function DenseLinearSystem{T}(A::Matrix{T}, b::Vector{Float64}, x::Vector{Float64}, A_scratch::Matrix{T}, solver_ws::W, lambda, scaling) where {T, W}
-    return DenseLinearSystem{T, W}(A, b, x, A_scratch, Vector{T}(undef, length(b)), solver_ws, lambda, scaling)
+function DenseLinearSystem{T}(A::Matrix{T}, b::Vector{Float64}, x::Vector{Float64}, A_scratch::Matrix{T}, solver_ws::W, lambda, scaling; condition::Bool=true) where {T, W}
+    n = length(b)
+    return DenseLinearSystem{T, W}(A, b, x, A_scratch, Vector{T}(undef, n), Vector{Float64}(undef, n), condition, solver_ws, lambda, scaling)
 end
-function DenseLinearSystem{T}(A::Matrix{T}, b::Vector{Float64}, x::Vector{Float64}, A_scratch::Matrix{T}, lambda, scaling) where T
-    return DenseLinearSystem{T}(A, b, x, A_scratch, nothing, lambda, scaling)
+function DenseLinearSystem{T}(A::Matrix{T}, b::Vector{Float64}, x::Vector{Float64}, A_scratch::Matrix{T}, lambda, scaling; condition::Bool=true) where T
+    return DenseLinearSystem{T}(A, b, x, A_scratch, nothing, lambda, scaling; condition)
 end
-function DenseLinearSystem{T}(n::Integer; solver_ws=nothing) where T
-    return DenseLinearSystem{T}(Matrix{T}(undef, n, n), Vector{Float64}(undef, n), Vector{Float64}(undef, n), Matrix{T}(undef, n, n), solver_ws, 0.0, nothing)
+function DenseLinearSystem{T}(n::Integer; solver_ws=nothing, condition::Bool=true) where T
+    return DenseLinearSystem{T}(Matrix{T}(undef, n, n), Vector{Float64}(undef, n), Vector{Float64}(undef, n), Matrix{T}(undef, n, n), solver_ws, 0.0, nothing; condition)
 end
-function DenseLinearSystem{T}(A::Matrix{T}, b::Vector{Float64}, x::Vector{Float64}, A_scratch::Matrix{T}=Matrix{T}(undef, size(A)); solver_ws=nothing) where T
-    return DenseLinearSystem{T}(A, b, x, A_scratch, solver_ws, 0.0, nothing)
+function DenseLinearSystem{T}(A::Matrix{T}, b::Vector{Float64}, x::Vector{Float64}, A_scratch::Matrix{T}=Matrix{T}(undef, size(A)); solver_ws=nothing, condition::Bool=true) where T
+    return DenseLinearSystem{T}(A, b, x, A_scratch, solver_ws, 0.0, nothing; condition)
 end
 DenseLinearSystem(n::Integer; kwargs...) = DenseLinearSystem{Float64}(n; kwargs...)
 DenseLinearSystem(A::Matrix{T}, b::Vector{Float64}, x::Vector{Float64}; kwargs...) where T = DenseLinearSystem{T}(A, b, x; kwargs...)
 
-# Sparse linear system. `rhs` and `sol` (length n, in `T`) are the right-hand side and the solution of the
-# factorized system.
+# Sparse linear system. A direct solve factorizes `Aw`, a matrix of A's pattern with values of its own, into which it
+# writes the conditioned, damped matrix, so `A` is never written; `rhs` and `sol` (length n, in `T`) are the
+# right-hand side and the solution of the factorized system, and `cs` the conditioning scale. A system and its
+# `copy_structure` copy share `Aw`, `rhs`, `sol` and `cs`: each solve writes them in full before reading them. The
+# Krylov and Pardiso solves (extensions) damp `A` in place and restore its diagonal from `diag_cache`.
 mutable struct SparseLinearSystem{T, Ti, SWS} <: AbstractLinearSystem
     const A::SparseMatrixCSC{T, Ti}
     const b::Vector{Float64}
@@ -66,14 +73,19 @@ mutable struct SparseLinearSystem{T, Ti, SWS} <: AbstractLinearSystem
     const diag_inds::Vector{Ti}
     const solver_ws::SWS
     const diag_cache::Vector{T}
+    const Aw::SparseMatrixCSC{T, Ti}
     const rhs::Vector{T}
     const sol::Vector{T}
+    const cs::Vector{Float64}
+    const condition::Bool
     lambda::Float64
     scaling::Union{Nothing, Vector{Float64}}
 end
-function SparseLinearSystem(A::SparseMatrixCSC{T, Ti}, b::Vector{Float64}, x::Vector{Float64}, diag_inds::Vector{Ti}, solver_ws::SWS, diag_cache::Vector{T}=copy(A.nzval[diag_inds])) where {T, Ti, SWS}
+function SparseLinearSystem(A::SparseMatrixCSC{T, Ti}, b::Vector{Float64}, x::Vector{Float64}, diag_inds::Vector{Ti}, solver_ws::SWS, diag_cache::Vector{T}=copy(A.nzval[diag_inds]); condition::Bool=true) where {T, Ti, SWS}
     n = length(b)
-    return SparseLinearSystem{T, Ti, SWS}(A, b, x, diag_inds, solver_ws, diag_cache, Vector{T}(undef, n), Vector{T}(undef, n), 0.0, nothing)
+    Aw = SparseMatrixCSC(A.m, A.n, A.colptr, A.rowval, similar(A.nzval))
+    return SparseLinearSystem{T, Ti, SWS}(A, b, x, diag_inds, solver_ws, diag_cache, Aw, Vector{T}(undef, n), Vector{T}(undef, n),
+                                          Vector{Float64}(undef, n), condition, 0.0, nothing)
 end
 
 function ensure_diag_and_inds(A::SparseMatrixCSC{T, Ti}) where {T, Ti}
@@ -146,23 +158,29 @@ makesparsews(A, s::Symbol) = makesparsews(A, static(s))
 
 # The prototype's element type is the system's (Float64 or Float32, precision.jl); a solver that does not offer it
 # is an ArgumentError here, before anything is built (decision 10).
-function makehessiansystem(H::SparseMatrixCSC{T}, linsolver) where T
+# `makehessiansystem` builds the system conditioned (conditioning.jl); `hessiansystem(H, linsolver, condition)` is the
+# internal builder, whose `condition = false` (for tests only) builds a conditioned system type unconditioned. The
+# static systems are never conditioned and ignore it.
+makehessiansystem(H::AbstractMatrix, linsolver) = hessiansystem(H, linsolver, true)
+makehessiansystem(n::Union{Integer, StaticInt}, linsolver) = hessiansystem(n, linsolver, true)
+
+function hessiansystem(H::SparseMatrixCSC{T}, linsolver, condition::Bool) where T
     check_eltype(T, "The sparse Hessian prototype")
     check_offers(T, :sparse, linsolver)
     A, diag_inds = ensure_diag_and_inds(H)
     sym = static(linsolver_symbol(linsolver))
     ws = makesparsews(A, sym)
     diag_cache = copy(A.nzval[diag_inds])
-    return SparseLinearSystem(A, zeros(Float64, size(A, 1)), zeros(Float64, size(A, 1)), diag_inds, ws, diag_cache)
+    return SparseLinearSystem(A, zeros(Float64, size(A, 1)), zeros(Float64, size(A, 1)), diag_inds, ws, diag_cache; condition)
 end
 
-function makehessiansystem(H::MMatrix{N, N, T, N2}, linsolver) where {N, T, N2}
+function hessiansystem(H::MMatrix{N, N, T, N2}, linsolver, ::Bool) where {N, T, N2}
     check_eltype(T, "The static Hessian prototype")
     check_offers(T, :static, linsolver)
     return StaticLinearSystem{N, N2, T}(H, MVector{N, Float64}(undef), MVector{N, Float64}(undef))
 end
 
-function makehessiansystem(H::StaticMatrix{N, N}, linsolver) where N
+function hessiansystem(H::StaticMatrix{N, N}, linsolver, ::Bool) where N
     T = eltype(H)
     check_eltype(T, "The static Hessian prototype")
     check_offers(T, :static, linsolver)
@@ -175,24 +193,24 @@ makedensews(n, s, ::Type{T}=Float64) where T = makedensews(n, static(linsolver_s
 makedensews(n, ::StaticSymbol{:ldl}, ::Type{T}) where T = DenseLDLWorkspace{T}(n)
 makedensews(n, ::StaticSymbol, ::Type) = nothing
 
-function makehessiansystem(H::Matrix{T}, linsolver) where T
+function hessiansystem(H::Matrix{T}, linsolver, condition::Bool) where T
     check_eltype(T, "The dense Hessian prototype")
     check_offers(T, :dense, linsolver)
     n = size(H, 1)
-    return DenseLinearSystem{T}(H, zeros(Float64, n), zeros(Float64, n); solver_ws=makedensews(n, linsolver, T))
+    return DenseLinearSystem{T}(H, zeros(Float64, n), zeros(Float64, n); solver_ws=makedensews(n, linsolver, T), condition)
 end
 
 # Another dense prototype (a `Diagonal`, a `Symmetric`, ...) is copied into a `Matrix` of its element type
-function makehessiansystem(H::AbstractMatrix, linsolver)
+function hessiansystem(H::AbstractMatrix, linsolver, condition::Bool)
     T = eltype(H)
     check_eltype(T, "The Hessian prototype")
-    return makehessiansystem(Matrix{T}(H), linsolver)
+    return hessiansystem(Matrix{T}(H), linsolver, condition)
 end
 
 # Without a prototype: a system of `n` variables, in Float64, static (StaticArrays) when `n` is a
 # `StaticInt` and dense when it is an `Int`. The caller decides which by the type of `n`.
-makehessiansystem(n::StaticInt, linsolver) = StaticLinearSystem{dynamic(n), Float64}()
-makehessiansystem(n::Integer, linsolver) = DenseLinearSystem{Float64}(Int(n); solver_ws=makedensews(Int(n), linsolver))
+hessiansystem(n::StaticInt, linsolver, ::Bool) = StaticLinearSystem{dynamic(n), Float64}()
+hessiansystem(n::Integer, linsolver, condition::Bool) = DenseLinearSystem{Float64}(Int(n); solver_ws=makedensews(Int(n), linsolver), condition)
 
 getA(ls::AbstractLinearSystem) = ls.A
 getb(ls::AbstractLinearSystem) = ls.b
@@ -221,7 +239,7 @@ dampen!(ls::AbstractLinearSystem, lambda::Real, scaling) = (ls.lambda = convert(
 
 # Copy structure for trial relinearization (LevMarDataTrial)
 copy_structure(ls::StaticLinearSystem{N, N2, T}) where {N, N2, T} = StaticLinearSystem{N, N2, T}(MMatrix{N, N, T, N2}(undef), MVector{N, Float64}(undef), ls.x, ls.lambda, ls.scaling)
-copy_structure(ls::DenseLinearSystem{T, W}) where {T, W} = DenseLinearSystem{T, W}(Matrix{T}(undef, size(ls.A)), Vector{Float64}(undef, length(ls.b)), ls.x, Matrix{T}(undef, size(ls.A)), Vector{T}(undef, length(ls.b)), ls.solver_ws, ls.lambda, ls.scaling)
+copy_structure(ls::DenseLinearSystem{T, W}) where {T, W} = DenseLinearSystem{T, W}(Matrix{T}(undef, size(ls.A)), Vector{Float64}(undef, length(ls.b)), ls.x, Matrix{T}(undef, size(ls.A)), Vector{T}(undef, length(ls.b)), Vector{Float64}(undef, length(ls.b)), ls.condition, ls.solver_ws, ls.lambda, ls.scaling)
 # The copy shares the solve's scratch (`rhs`, `sol`): each solve writes it in full before reading it
 copy_structure(ls::SparseLinearSystem{T, Ti, SWS}) where {T, Ti, SWS} = SparseLinearSystem{T, Ti, SWS}(
     SparseMatrixCSC(ls.A.m, ls.A.n, ls.A.colptr, ls.A.rowval, Vector{T}(undef, length(ls.A.nzval))),
@@ -230,15 +248,18 @@ copy_structure(ls::SparseLinearSystem{T, Ti, SWS}) where {T, Ti, SWS} = SparseLi
     ls.diag_inds,
     ls.solver_ws,
     copy(ls.diag_cache),
+    ls.Aw,
     ls.rhs,
     ls.sol,
+    ls.cs,
+    ls.condition,
     ls.lambda,
     ls.scaling
 )
 
 sharex(ls::StaticLinearSystem{N, N2, T}, from) where {N, N2, T} = ls.x === from.x ? ls : StaticLinearSystem{N, N2, T}(ls.A, ls.b, from.x, ls.lambda, ls.scaling)
-sharex(ls::DenseLinearSystem{T, W}, from) where {T, W} = ls.x === from.x ? ls : DenseLinearSystem{T, W}(ls.A, ls.b, from.x, ls.A_scratch, ls.rhs, ls.solver_ws, ls.lambda, ls.scaling)
-sharex(ls::SparseLinearSystem{T, Ti, SWS}, from) where {T, Ti, SWS} = ls.x === from.x ? ls : SparseLinearSystem{T, Ti, SWS}(ls.A, ls.b, from.x, ls.diag_inds, ls.solver_ws, ls.diag_cache, ls.rhs, ls.sol, ls.lambda, ls.scaling)
+sharex(ls::DenseLinearSystem{T, W}, from) where {T, W} = ls.x === from.x ? ls : DenseLinearSystem{T, W}(ls.A, ls.b, from.x, ls.A_scratch, ls.rhs, ls.cs, ls.condition, ls.solver_ws, ls.lambda, ls.scaling)
+sharex(ls::SparseLinearSystem{T, Ti, SWS}, from) where {T, Ti, SWS} = ls.x === from.x ? ls : SparseLinearSystem{T, Ti, SWS}(ls.A, ls.b, from.x, ls.diag_inds, ls.solver_ws, ls.diag_cache, ls.Aw, ls.rhs, ls.sol, ls.cs, ls.condition, ls.lambda, ls.scaling)
 
 # Diagonal operations for damping
 function uniformscaling!(A::AbstractMatrix, k)

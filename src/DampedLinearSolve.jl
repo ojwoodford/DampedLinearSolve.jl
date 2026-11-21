@@ -33,6 +33,9 @@ include("utils.jl")
 # The element types a system is built in, and which solver offers which
 include("precision.jl")
 
+# Conditioning inside the solve: the scale, and the systems' internal switch
+include("conditioning.jl")
+
 # The contract, and the systems with a square Hessian: static, dense and sparse
 include("linearsystem.jl")
 include("linearsolver.jl")

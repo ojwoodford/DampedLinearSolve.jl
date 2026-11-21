@@ -173,7 +173,7 @@ struct JacobianLsmrWorkspace{W}
     ws::W
     invscale::Vector{Float64}     # N = F⁻¹, the inverse of the Marquardt scaling
 end
-makejacobianws(m, n, ::StaticSymbol{:lsmr}, ::Type{Float64}) = JacobianLsmrWorkspace(Krylov.LsmrWorkspace(m, n, Vector{Float64}), Vector{Float64}(undef, n))
+makejacobianws(m, n, ::StaticSymbol{:lsmr}, ::Type{Float64}, ::Bool) = JacobianLsmrWorkspace(Krylov.LsmrWorkspace(m, n, Vector{Float64}), Vector{Float64}(undef, n))
 builtfor(::JacobianLsmrWorkspace) = ":lsmr"
 
 # J as an operator, and its adjoint, for Krylov

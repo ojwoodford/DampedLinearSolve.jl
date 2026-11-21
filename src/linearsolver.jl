@@ -200,24 +200,55 @@ function solve!(ls::StaticLinearSystem, ::StaticSymbol{:qr})
     return Success
 end
 
-# DenseLinearSystem. `prepare_dense!` writes the damped matrix into `A_scratch` and the right-hand side
-# into `rhs` (narrowed to `T`); the factorization solves `rhs` in place, and `finish_dense!` widens it into `x`.
-function prepare_dense!(ls::DenseLinearSystem)
-    copyto!(ls.A_scratch, ls.A)
-    if ls.lambda > 0
-        if isnothing(ls.scaling)
-            uniformscaling!(ls.A_scratch, ls.lambda)
-        else
-            damp_marquardt!(ls.A_scratch, ls.scaling, ls.lambda)
+# DenseLinearSystem. `prepare_dense!` writes the conditioned, damped matrix S(A + λD)S into `A_scratch` and the
+# right-hand side S b into `rhs` (narrowed to `T`); the factorization solves `rhs` in place, and `finish_dense!` widens
+# x = S y into `x`. Unconditioned, S = I. The damping of entry j, λ·D_jj·s_j², is formed in Float64 and added there,
+# and the sum narrowed once.
+function prepare_dense!(ls::DenseLinearSystem{T}) where T
+    A, M, n = ls.A, ls.A_scratch, length(ls.b)
+    lambda, scaling = ls.lambda, ls.scaling
+    if ls.condition
+        s = ls.cs
+        @inbounds for j in 1:n
+            s[j] = conditioning_scale(A[j, j], T)
         end
+        @inbounds for j in 1:n
+            sj = T(s[j])
+            for i in 1:n
+                M[i, j] = (A[i, j] * T(s[i])) * sj
+            end
+        end
+        if lambda > 0
+            @inbounds for j in 1:n
+                M[j, j] += (isnothing(scaling) ? lambda : lambda * scaling[j]) * (s[j] * s[j])
+            end
+        end
+        @inbounds for i in 1:n
+            ls.rhs[i] = s[i] * ls.b[i]
+        end
+    else
+        copyto!(M, A)
+        if lambda > 0
+            if isnothing(scaling)
+                uniformscaling!(M, lambda)
+            else
+                damp_marquardt!(M, scaling, lambda)
+            end
+        end
+        copyto!(ls.rhs, ls.b)
     end
-    copyto!(ls.rhs, ls.b)
     return ls
 end
 # x from the solved `rhs`; a non-finite solution is a failed solve (whether a NaN fails a factorization
 # depends on the LAPACK)
 function finish_dense!(ls)
-    copyto!(ls.x, ls.rhs)
+    if ls.condition
+        @inbounds for i in eachindex(ls.x)
+            ls.x[i] = ls.cs[i] * ls.rhs[i]
+        end
+    else
+        copyto!(ls.x, ls.rhs)
+    end
     return all(isfinite, ls.x)
 end
 
@@ -306,37 +337,60 @@ function solve!(ls::DenseLinearSystem, ::StaticSymbol{:qr})
     return finish_dense!(ls) ? Success : NotPositiveDefinite
 end
 
-# SparseLinearSystem. The damping is added to A's diagonal in place and the undamped diagonal restored
-# after the factorization (`restore_diag!`); the right-hand side is narrowed into `rhs`, and the solution
-# (in `rhs` or `sol`) widened into `x`.
-function damp_sparse!(ls::SparseLinearSystem)
-    if ls.lambda > 0
-        if isnothing(ls.scaling)
-            uniformscaling!(ls, ls.lambda)
-        else
-            damp_marquardt!(ls, ls.scaling, ls.lambda)
+# SparseLinearSystem. `prepare_sparse!` writes the conditioned, damped matrix S(A + λD)S into `Aw` (A's pattern, its
+# own values) and S b into `rhs`, as `prepare_dense!` does for the dense system; `finish_sparse!` widens x = S y from
+# the solution `y`. A is never written.
+function prepare_sparse!(ls::SparseLinearSystem{T}) where T
+    A, w, n = ls.A, nonzeros(ls.Aw), length(ls.b)
+    nzv, rv = nonzeros(A), rowvals(A)
+    lambda, scaling = ls.lambda, ls.scaling
+    if ls.condition
+        s = ls.cs
+        @inbounds for (j, idx) in enumerate(ls.diag_inds)
+            s[j] = conditioning_scale(nzv[idx], T)
         end
+        @inbounds for j in 1:n
+            sj = T(s[j])
+            for k in nzrange(A, j)
+                w[k] = (nzv[k] * T(s[rv[k]])) * sj
+            end
+        end
+        if lambda > 0
+            @inbounds for (j, idx) in enumerate(ls.diag_inds)
+                w[idx] += (isnothing(scaling) ? lambda : lambda * scaling[j]) * (s[j] * s[j])
+            end
+        end
+        @inbounds for i in 1:n
+            ls.rhs[i] = s[i] * ls.b[i]
+        end
+    else
+        copyto!(w, nzv)
+        if lambda > 0
+            @inbounds for (j, idx) in enumerate(ls.diag_inds)
+                w[idx] += isnothing(scaling) ? lambda : lambda * scaling[j]
+            end
+        end
+        copyto!(ls.rhs, ls.b)
     end
     return ls
 end
-function restore_diag!(ls::SparseLinearSystem)
-    if ls.lambda > 0
-        @inbounds for (i, idx) in enumerate(ls.diag_inds)
-            ls.A.nzval[idx] = ls.diag_cache[i]
+function finish_sparse!(ls::SparseLinearSystem, y::AbstractVector)
+    if ls.condition
+        @inbounds for i in eachindex(ls.x)
+            ls.x[i] = ls.cs[i] * y[i]
         end
+    else
+        copyto!(ls.x, y)
     end
-    return ls
+    return all(isfinite, ls.x)
 end
 
 function solve!(ls::SparseLinearSystem, ::Union{StaticSymbol{:auto}, StaticSymbol{:ldl}})
-    damp_sparse!(ls)
-    F = ldl_factorize!(ls.A, ls.solver_ws)
-    restore_diag!(ls)
+    prepare_sparse!(ls)
+    F = ldl_factorize!(ls.Aw, ls.solver_ws)
     if LDLFactorizations.factorized(F)
-        copyto!(ls.rhs, ls.b)
         ldiv!(F, ls.rhs)
-        copyto!(ls.x, ls.rhs)
-        all(isfinite, ls.x) || return NotPositiveDefinite
+        finish_sparse!(ls, ls.rhs) || return NotPositiveDefinite
         if is_indefinite(F)
             return Indefinite
         end
@@ -345,34 +399,26 @@ function solve!(ls::SparseLinearSystem, ::Union{StaticSymbol{:auto}, StaticSymbo
     return NotPositiveDefinite
 end
 
+# The damping is on the diagonal of `Aw`, for uniform damping too: λS² is not uniform, so CHOLMOD's `shift` does not
+# apply to a conditioned system, and one route serves both
 function solve!(ls::SparseLinearSystem, ::StaticSymbol{:cholesky})
-    if isnothing(ls.scaling)
-        shift_val = Float64(ls.lambda)
-        cholfac = cholesky!(ls.solver_ws, Symmetric(ls.A, :U); shift=shift_val, check=false)
-    else
-        damp_sparse!(ls)
-        cholfac = cholesky!(ls.solver_ws, Symmetric(ls.A, :U); check=false)
-        restore_diag!(ls)
-    end
+    prepare_sparse!(ls)
+    cholfac = cholesky!(ls.solver_ws, Symmetric(ls.Aw, :U); check=false)
     if issuccess(cholfac)
-        copyto!(ls.rhs, ls.b)
         @static if VERSION >= v"1.12.0-"   # COV_EXCL_LINE: Julia 1.10 counts this line, but it runs at macro expansion
             ldiv!(ls.sol, cholfac, ls.rhs)   # in place; this method first appears in Julia 1.12
         else
             ls.sol .= cholfac \ ls.rhs
         end
-        copyto!(ls.x, ls.sol)
-        return all(isfinite, ls.x) ? Success : NotPositiveDefinite
+        return finish_sparse!(ls, ls.sol) ? Success : NotPositiveDefinite
     end
     return NotPositiveDefinite
 end
 
 function solve!(ls::SparseLinearSystem, ::StaticSymbol{:qr})
-    damp_sparse!(ls)
-    copyto!(ls.rhs, ls.b)
-    ls.x .= qr(ls.A) \ ls.rhs
-    restore_diag!(ls)
-    return all(isfinite, ls.x) ? Success : NotPositiveDefinite
+    prepare_sparse!(ls)
+    ls.sol .= qr(ls.Aw) \ ls.rhs
+    return finish_sparse!(ls, ls.sol) ? Success : NotPositiveDefinite
 end
 
 # Method dispatch for a Symbol

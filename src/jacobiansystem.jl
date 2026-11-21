@@ -44,19 +44,21 @@ geqrf_worksize(m::Integer, n::Integer) = geqrf_worksize(m, n, Float64)
 # has a live factorization at a time (the trial system is not solved until it becomes the main
 # one). `owner` is the token of the system whose factorization the scratch holds (0: none).
 # In `T`, the system's element type: `r` is narrowed into the last column of `Jr`.
+# Conditioned (conditioning.jl), `Jr` holds [J S r] and `cs` the scale s of the factorization it holds.
 mutable struct JacobianQRScratch{T}
-    const Jr::Matrix{T}     # m × (n+1): [J r], factored in place; R and q = (Qᵀr)[1:k] on top
+    const Jr::Matrix{T}     # m × (n+1): [J S r], factored in place; R and q = (Qᵀr)[1:k] on top
     const tau::Vector{T}
-    const S::Matrix{T}      # 2n × (n+1): [R q; √λ D^½ 0], factored in place per damping
+    const S::Matrix{T}      # 2n × (n+1): [R q; √λ D^½ S 0], factored in place per damping
     const tau2::Vector{T}
     const work::Vector{T}
+    const cs::Vector{Float64}
     owner::Int
 end
 function JacobianQRScratch{T}(m::Integer, n::Integer) where T
     lwork = max(geqrf_worksize(m, n + 1, T), geqrf_worksize(2n, n + 1, T))
     return JacobianQRScratch{T}(Matrix{T}(undef, m, n + 1), Vector{T}(undef, min(m, n + 1)),
                          Matrix{T}(undef, 2n, n + 1), Vector{T}(undef, min(2n, n + 1)),
-                         Vector{T}(undef, lwork), 0)
+                         Vector{T}(undef, lwork), ones(n), 0)
 end
 JacobianQRScratch(m::Integer, n::Integer) = JacobianQRScratch{Float64}(m, n)
 
@@ -249,24 +251,25 @@ mutable struct DenseJacobianLinearSystem{W, T} <: AbstractJacobianLinearSystem
     const b::Vector{Float64}      # the gradient Jᵀr
     const x::Vector{Float64}
     const solver_ws::W            # the workspace of an iterative solver or of the normal equations (`makejacobianws`), or nothing for QR
+    const condition::Bool         # the internal switch of the conditioning (conditioning.jl)
     lambda::Float64
     scaling::Union{Nothing, Vector{Float64}}
 end
 # `T`, the element type of J, is the system's: J, the factorization and its scratch are in T
-function DenseJacobianLinearSystem(J::Matrix{T}; linsolver = :auto) where T
+function DenseJacobianLinearSystem(J::Matrix{T}; linsolver = :auto, condition::Bool = true) where T
     m, n = size(J)
     A = JacobianStorage(J, zeros(m), zeros(m), JacobianQRWorkspace(qrscratch(m, n, linsolver, T), n))
-    return DenseJacobianLinearSystem(A, zeros(n), zeros(n), makejacobianws(m, n, linsolver, T), 0.0, nothing)
+    return DenseJacobianLinearSystem(A, zeros(n), zeros(n), makejacobianws(m, n, linsolver, T, condition), condition, 0.0, nothing)
 end
-DenseJacobianLinearSystem(m::Integer, n::Integer; linsolver = :auto) = DenseJacobianLinearSystem(zeros(Float64, m, n); linsolver)
+DenseJacobianLinearSystem(m::Integer, n::Integer; linsolver = :auto, condition::Bool = true) = DenseJacobianLinearSystem(zeros(Float64, m, n); linsolver, condition)
 isfinitesystem(ls::DenseJacobianLinearSystem) = all(isfinite, ls.A.J) && all(isfinite, ls.A.r)
 
 # The solvers of the Jacobian systems: QR (`:auto`, `:qr`) and, for the dense system, the normal
 # equations (`:cholesky`, `:ldl`, jacobiannormalsystem.jl) in this package, and those an extension adds
 # through `makejacobianws` (LSMR, in KrylovExt), which builds the solver's workspace
 needsqr(linsolver) = linsolver_symbol(linsolver) in (:auto, :qr)
-makejacobianws(m, n, linsolver, ::Type{T}=Float64) where T = makejacobianws(m, n, static(linsolver_symbol(linsolver)), T)
-makejacobianws(m, n, ::StaticSymbol, ::Type) = nothing
+makejacobianws(m, n, linsolver, ::Type{T}=Float64, condition::Bool=true) where T = makejacobianws(m, n, static(linsolver_symbol(linsolver)), T, condition)
+makejacobianws(m, n, ::StaticSymbol, ::Type, ::Bool) = nothing
 # The QR scratch of the dense system: [J r] and the stacked matrix for QR; an iterative solver keeps
 # only the empty scratch's owner token
 qrscratch(m, n, linsolver, ::Type{T}=Float64) where T = qrscratch(m, n, static(linsolver_symbol(linsolver)), T)
@@ -291,18 +294,22 @@ const LSMR_CONLIM = 1 / sqrt(eps(Float64))
 # when the system is built.
 # The element type of a Matrix prototype is the system's (Float64 or Float32); with an integer m it is Float64. A solver
 # that does not offer it is an ArgumentError here (decision 10).
-function makejacobiansystem(m::Integer, n, linsolver)
+# `makejacobiansystem` builds the system conditioned; `jacobiansystem(J, n, linsolver, condition)` is the internal
+# builder (as `hessiansystem` is for a Hessian system)
+makejacobiansystem(m::Integer, n, linsolver) = jacobiansystem(m, n, linsolver, true)
+makejacobiansystem(J::Matrix, n, linsolver) = jacobiansystem(J, n, linsolver, true)
+function jacobiansystem(m::Integer, n, linsolver, condition::Bool)
     usesstaticjacobian(m, n, linsolver) && return StaticJacobianLinearSystem(zeros(MMatrix{Int(m), dynamic(n), Float64}))
-    return DenseJacobianLinearSystem(m, dynamic(n); linsolver)
+    return DenseJacobianLinearSystem(m, dynamic(n); linsolver, condition)
 end
-function makejacobiansystem(J::Matrix{T}, n, linsolver) where T
+function jacobiansystem(J::Matrix{T}, n, linsolver, condition::Bool) where T
     check_eltype(T, "The Jacobian prototype")
     if usesstaticjacobian(size(J, 1), n, linsolver)
         check_offers(T, :jacobian_static, linsolver)
         return StaticJacobianLinearSystem(J)
     end
     check_offers(T, :jacobian_dense, linsolver)
-    return DenseJacobianLinearSystem(J; linsolver)
+    return DenseJacobianLinearSystem(J; linsolver, condition)
 end
 
 # resjac! sets every entry of r and every entry of J that can be non-zero, so a fresh
@@ -322,13 +329,15 @@ function copy_structure(ls::DenseJacobianLinearSystem)
     A = ls.A
     m, n = size(A.J)
     At = JacobianStorage(copy(A.J), zeros(m), zeros(m), JacobianQRWorkspace(A.ws.scratch, n))
-    return DenseJacobianLinearSystem(At, zeros(length(ls.b)), ls.x, ls.solver_ws, ls.lambda, ls.scaling)
+    return DenseJacobianLinearSystem(At, zeros(length(ls.b)), ls.x, ls.solver_ws, ls.condition, ls.lambda, ls.scaling)
 end
-sharex(ls::DenseJacobianLinearSystem, from) = ls.x === from.x ? ls : DenseJacobianLinearSystem(ls.A, ls.b, from.x, ls.solver_ws, ls.lambda, ls.scaling)
+sharex(ls::DenseJacobianLinearSystem, from) = ls.x === from.x ? ls : DenseJacobianLinearSystem(ls.A, ls.b, from.x, ls.solver_ws, ls.condition, ls.lambda, ls.scaling)
 
 # QR of [J r]; afterwards Jr[1:k, 1:n] holds R (upper trapezoidal) and Jr[1:k, n+1] holds
 # q = (Qᵀr)[1:k], with k = min(m, n)
-function factor_jacobian!(A::JacobianStorage)
+# Conditioned, the columns of J are scaled by s (from the column norms) as they are copied, and s is kept in the
+# scratch with the factorization
+function factor_jacobian!(A::JacobianStorage{T}, condition::Bool) where T
     ws = A.ws
     J, r = A.J, A.r
     m, n = size(J)
@@ -338,7 +347,19 @@ function factor_jacobian!(A::JacobianStorage)
     ws.nonfinite = !(all(isfinite, J) && all(isfinite, r))
     ws.nonfinite && return nothing
     Jr = sc.Jr
-    copyto!(view(Jr, :, 1:n), J)
+    if condition
+        d = colnorms2!(A)
+        @inbounds for j in 1:n
+            sc.cs[j] = conditioning_scale(d[j], T)
+            sj = T(sc.cs[j])
+            for i in 1:m
+                Jr[i, j] = J[i, j] * sj
+            end
+        end
+    else
+        fill!(sc.cs, 1.0)
+        copyto!(view(Jr, :, 1:n), J)
+    end
     copyto!(view(Jr, :, n + 1), r)   # narrowed to the scratch's element type
     geqrf_ws!(Jr, sc.tau, sc.work)
     ws.nfactor += 1
@@ -378,7 +399,7 @@ function solve!(ls::DenseJacobianLinearSystem, s::Union{StaticSymbol{:auto}, Sta
     ws = A.ws
     m, n = size(A.J)
     size(ws.scratch.Jr, 1) == m || solvermismatch(ls, dynamic(s))
-    factorized(ws) || factor_jacobian!(A)
+    factorized(ws) || factor_jacobian!(A, ls.condition)
     if ws.nonfinite
         fill!(ls.x, NaN)
         return NotPositiveDefinite
@@ -394,6 +415,7 @@ function solve!(ls::DenseJacobianLinearSystem, s::Union{StaticSymbol{:auto}, Sta
             ls.x[i] = Jr[i, n + 1]
         end
         backsubstitute!(ls.x, Jr, n)
+        unscale!(ls.x, sc.cs, ls.condition)
         return Success
     end
     # Damped: QR of [R q; √λ D^½ 0], then back-substitution
@@ -407,7 +429,7 @@ function solve!(ls::DenseJacobianLinearSystem, s::Union{StaticSymbol{:auto}, Sta
             S[i, j] = Jr[i, j]
         end
         for i in 1:n
-            S[n + i, i] = sqrt(lambda * (isnothing(scaling) ? 1.0 : scaling[i]))
+            S[n + i, i] = sqrt(lambda * (isnothing(scaling) ? 1.0 : scaling[i])) * sc.cs[i]
         end
     end
     geqrf_ws!(S, sc.tau2, sc.work)
@@ -416,7 +438,18 @@ function solve!(ls::DenseJacobianLinearSystem, s::Union{StaticSymbol{:auto}, Sta
         ls.x[i] = S[i, n + 1]
     end
     backsubstitute!(ls.x, S, n)
+    unscale!(ls.x, sc.cs, ls.condition)
     return Success
+end
+
+# x = S y, for a conditioned solve
+function unscale!(x::AbstractVector, s::Vector{Float64}, condition::Bool)
+    if condition
+        @inbounds for i in eachindex(x)
+            x[i] *= s[i]
+        end
+    end
+    return x
 end
 
 # A solver the system takes but was not built for (the normal equations' are in jacobiannormalsystem.jl)

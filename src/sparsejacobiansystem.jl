@@ -217,22 +217,25 @@ mutable struct SparseJacobianLinearSystem{W, T} <: AbstractJacobianLinearSystem
     const b::Vector{Float64}
     const x::Vector{Float64}
     const solver_ws::W            # an iterative solver's workspace (`makejacobianws`), or nothing for SPQR
+    const cs::Vector{Float64}     # the conditioning scale of the last SPQR solve, shared with a copy_structure copy
+    const condition::Bool         # the internal switch of the conditioning (conditioning.jl)
     lambda::Float64
     scaling::Union{Nothing, Vector{Float64}}
 end
 # `T` is the element type of J: SPQR (`:auto`, `:qr`) is Float64 only (precision.jl), an iterative solver may offer
 # Float32
-function SparseJacobianLinearSystem(J::SparseMatrixCSC{T, Int}; linsolver = :auto) where T
+function SparseJacobianLinearSystem(J::SparseMatrixCSC{T, Int}; linsolver = :auto, condition::Bool = true) where T
     m, n = size(J)
     spqr = needsqr(linsolver) ? SPQRWorkspace(J) : nothing   # an iterative solver needs no analysis
     A = SparseJacobianStorage(J, zeros(m), zeros(m), SparseJacobianWorkspace(spqr, J))
-    return SparseJacobianLinearSystem(A, zeros(n), zeros(n), makejacobianws(m, n, linsolver, T), 0.0, nothing)
+    return SparseJacobianLinearSystem(A, zeros(n), zeros(n), makejacobianws(m, n, linsolver, T, condition), ones(n), condition, 0.0, nothing)
 end
 
-function makejacobiansystem(J::SparseMatrixCSC{T, Int}, n, linsolver) where T
+makejacobiansystem(J::SparseMatrixCSC, n, linsolver) = jacobiansystem(J, n, linsolver, true)
+function jacobiansystem(J::SparseMatrixCSC{T, Int}, n, linsolver, condition::Bool) where T
     check_eltype(T, "The sparse Jacobian prototype")
     check_offers(T, :jacobian_sparse, linsolver)
-    return SparseJacobianLinearSystem(J; linsolver)
+    return SparseJacobianLinearSystem(J; linsolver, condition)
 end
 isfinitesystem(ls::SparseJacobianLinearSystem) = all(isfinite, nonzeros(ls.A.J)) && all(isfinite, ls.A.r)
 
@@ -245,9 +248,9 @@ function copy_structure(ls::SparseJacobianLinearSystem)
     m, n = size(A.J)
     J = copy(A.J)
     At = SparseJacobianStorage(J, zeros(m), zeros(m), SparseJacobianWorkspace(A.ws.spqr, J))
-    return SparseJacobianLinearSystem(At, zeros(length(ls.b)), ls.x, ls.solver_ws, ls.lambda, ls.scaling)
+    return SparseJacobianLinearSystem(At, zeros(length(ls.b)), ls.x, ls.solver_ws, ls.cs, ls.condition, ls.lambda, ls.scaling)
 end
-sharex(ls::SparseJacobianLinearSystem, from) = ls.x === from.x ? ls : SparseJacobianLinearSystem(ls.A, ls.b, from.x, ls.solver_ws, ls.lambda, ls.scaling)
+sharex(ls::SparseJacobianLinearSystem, from) = ls.x === from.x ? ls : SparseJacobianLinearSystem(ls.A, ls.b, from.x, ls.solver_ws, ls.cs, ls.condition, ls.lambda, ls.scaling)
 
 # The gradient Jᵀr, after checking that the linearization kept J's pattern
 function gradient!(g::AbstractVector, A::SparseJacobianStorage)
@@ -264,37 +267,47 @@ function solve!(ls::SparseJacobianLinearSystem, ::Union{StaticSymbol{:auto}, Sta
     sp = A.ws.spqr
     isnothing(sp) && solvermismatch(ls, :qr)
     A.ws.nfactor += 1
+    if ls.condition
+        d = colnorms2!(A)
+        @inbounds for j in eachindex(ls.cs)
+            ls.cs[j] = conditioning_scale(d[j], Float64)
+        end
+        return spqr_solve!(ls.x, sp, A.J, A.r, max(ls.lambda, 0.0), ls.scaling, ls.cs)
+    end
     return spqr_solve!(ls.x, sp, A.J, A.r, max(ls.lambda, 0.0), ls.scaling)
 end
 
 """
-    spqr_solve!(x, sp::SPQRWorkspace, J, r, lambda, scaling) -> SolveStatus
+    spqr_solve!(x, sp::SPQRWorkspace, J, r, lambda, scaling, cs = nothing) -> SolveStatus
 
 The least-squares solution `x` of `[J; √(λ s)] x = [r; 0]` by SPQR, with `sp` built for `J`'s pattern
 (`SPQRWorkspace(J)`), `s` the `scaling` (all ones for `nothing`): the values of `J` and `r` are written into
 the augmented storage in place, and SPQR's numeric factorization, Qᵀb and triangular solve run. Returns
 `NotPositiveDefinite` when the augmented matrix is numerically rank deficient (SPQR's rank estimate below
 `n` at a column-norm tolerance of `max(m + n, n)·eps` times its largest column norm), `Success` otherwise.
-The caller checks that `J` and `r` are finite. Shared by the sparse Jacobian system and the sparse reduced
-system of QR elimination.
+With a conditioning scale `cs` (conditioning.jl), the columns are scaled by it, `[J S; √(λ s) S] y = [r; 0]` is
+solved and `x = S y` returned; the rank tolerance is then relative to the scaled matrix. The caller checks that `J`
+and `r` are finite.
 """
-function spqr_solve!(x::AbstractVector, sp::SPQRWorkspace, J::SparseMatrixCSC{Float64, Int}, r::AbstractVector, lambda::Float64, scaling)
+function spqr_solve!(x::AbstractVector, sp::SPQRWorkspace, J::SparseMatrixCSC{Float64, Int}, r::AbstractVector, lambda::Float64, scaling, cs=nothing)
     m, n = size(J)
     nzv = nonzeros(J)
     # The augmented values, and the largest squared column norm of the augmented matrix
     maxnorm2 = 0.0
     k = 0
     @inbounds for j in 1:n
+        c = isnothing(cs) ? 1.0 : cs[j]   # the column's conditioning scale (a power of two)
         total = 0.0
         for q in nzrange(J, j)
             k += 1
-            sp.x[k] = nzv[q]
-            total += nzv[q] * nzv[q]
+            v = nzv[q] * c
+            sp.x[k] = v
+            total += v * v
         end
         d2 = lambda * (isnothing(scaling) ? 1.0 : scaling[j])
         k += 1
-        sp.x[k] = sqrt(d2)
-        maxnorm2 = max(maxnorm2, total + d2)
+        sp.x[k] = sqrt(d2) * c
+        maxnorm2 = max(maxnorm2, total + d2 * (c * c))
     end
     @inbounds for i in 1:m
         sp.rhs[i] = r[i]
@@ -315,7 +328,7 @@ function spqr_solve!(x::AbstractVector, sp::SPQRWorkspace, J::SparseMatrixCSC{Fl
         X == C_NULL && error("SPQR's triangular solve failed (status $(sp.common[].status))")
         xs = dense_x(X)
         @inbounds for i in 1:n
-            x[i] = unsafe_load(xs, i)
+            x[i] = (isnothing(cs) ? 1.0 : cs[i]) * unsafe_load(xs, i)
         end
         free_dense!(sp, X)
     end

@@ -13,12 +13,14 @@ struct JacobianNormalWorkspace{S, H}
     hs::H
 end
 # In `T`, the element type of J: the product JᵀJ and its factorization
-function JacobianNormalWorkspace{S}(n::Integer, ::Type{T}=Float64) where {S, T}
-    hs = makehessiansystem(zeros(T, n, n), static(S))
+# Conditioned, the dense Hessian system conditions the product from its diagonal, the squared column norms of J
+# (computed in T), which is (J S)ᵀ(J S)
+function JacobianNormalWorkspace{S}(n::Integer, ::Type{T}=Float64, condition::Bool=true) where {S, T}
+    hs = hessiansystem(zeros(T, n, n), static(S), condition)
     return JacobianNormalWorkspace{S, typeof(hs)}(hs)
 end
-makejacobianws(m, n, ::StaticSymbol{:cholesky}, ::Type{T}) where T = JacobianNormalWorkspace{:cholesky}(n, T)
-makejacobianws(m, n, ::StaticSymbol{:ldl}, ::Type{T}) where T = JacobianNormalWorkspace{:ldl}(n, T)
+makejacobianws(m, n, ::StaticSymbol{:cholesky}, ::Type{T}, condition::Bool) where T = JacobianNormalWorkspace{:cholesky}(n, T, condition)
+makejacobianws(m, n, ::StaticSymbol{:ldl}, ::Type{T}, condition::Bool) where T = JacobianNormalWorkspace{:ldl}(n, T, condition)
 builtfor(::JacobianNormalWorkspace{S}) where S = ":$S"
 
 # No QR is done, so the QR scratch holds no copy of [J r] and no stacked matrix: it is kept only for
