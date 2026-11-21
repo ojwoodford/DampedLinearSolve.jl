@@ -144,24 +144,25 @@ end
 # Linear solve dispatching on solver symbol: :auto, :cholesky, :ldl, :qr
 solve!(ls) = solve!(ls, static(:auto))
 
-# StaticLinearSystem
-@inline function damped_static(ls::StaticLinearSystem)
+# StaticLinearSystem: A_ is the damped matrix in `T`; the damping is formed in Float64 and narrowed once
+@inline function damped_static(ls::StaticLinearSystem{N, N2, T}) where {N, N2, T}
     A_ = SMatrix(ls.A)
     if ls.lambda > 0
         if isnothing(ls.scaling)
-            A_ = A_ + ls.lambda * I
+            A_ = A_ + convert(T, ls.lambda) * I
         else
-            A_ = A_ + Diagonal(ls.lambda .* ls.scaling)
+            A_ = A_ + Diagonal(SVector{N, T}(ls.lambda .* ls.scaling))
         end
     end
     return A_
 end
+@inline static_rhs(ls::StaticLinearSystem{N, N2, T}) where {N, N2, T} = SVector{N, T}(ls.b)
 
 function solve!(ls::StaticLinearSystem, ::Union{StaticSymbol{:auto}, StaticSymbol{:cholesky}})
     A_ = damped_static(ls)
     cholfac = cholesky(Symmetric(A_); check=false)
     if issuccess(cholfac) && has_positive_pivots(cholfac)
-        ls.x .= cholfac \ SVector(ls.b)
+        ls.x .= cholfac \ static_rhs(ls)
         return Success
     end
     return NotPositiveDefinite
@@ -175,13 +176,13 @@ function solve!(ls::StaticLinearSystem, ::StaticSymbol{:ldl})
     A_ = damped_static(ls)
     cholfac = cholesky(Symmetric(A_); check=false)
     if issuccess(cholfac) && has_positive_pivots(cholfac)
-        ls.x .= cholfac \ SVector(ls.b)
+        ls.x .= cholfac \ static_rhs(ls)
         return Success
     end
     all(isfinite, A_) || return NotPositiveDefinite
     lufac = lu(A_; check=false)
     issuccess(lufac) || return NotPositiveDefinite
-    x_ = lufac \ SVector(ls.b)
+    x_ = lufac \ static_rhs(ls)
     all(isfinite, x_) || return NotPositiveDefinite
     ls.x .= x_
     return Indefinite
@@ -193,14 +194,15 @@ function solve!(ls::StaticLinearSystem, ::StaticSymbol{:qr})
     A_ = damped_static(ls)
     lufac = lu(A_; check=false)
     issuccess(lufac) || return NotPositiveDefinite
-    x_ = lufac \ SVector(ls.b)
+    x_ = lufac \ static_rhs(ls)
     all(isfinite, x_) || return NotPositiveDefinite
     ls.x .= x_
     return Success
 end
 
-# DenseLinearSystem
-function solve!(ls::DenseLinearSystem, ::Union{StaticSymbol{:auto}, StaticSymbol{:cholesky}})
+# DenseLinearSystem. `prepare_dense!` writes the damped matrix into `A_scratch` and the right-hand side
+# into `rhs` (narrowed to `T`); the factorization solves `rhs` in place, and `finish_dense!` widens it into `x`.
+function prepare_dense!(ls::DenseLinearSystem)
     copyto!(ls.A_scratch, ls.A)
     if ls.lambda > 0
         if isnothing(ls.scaling)
@@ -209,84 +211,86 @@ function solve!(ls::DenseLinearSystem, ::Union{StaticSymbol{:auto}, StaticSymbol
             damp_marquardt!(ls.A_scratch, ls.scaling, ls.lambda)
         end
     end
+    copyto!(ls.rhs, ls.b)
+    return ls
+end
+# x from the solved `rhs`; a non-finite solution is a failed solve (whether a NaN fails a factorization
+# depends on the LAPACK)
+function finish_dense!(ls)
+    copyto!(ls.x, ls.rhs)
+    return all(isfinite, ls.x)
+end
+
+function solve!(ls::DenseLinearSystem, ::Union{StaticSymbol{:auto}, StaticSymbol{:cholesky}})
+    prepare_dense!(ls)
     cholfac = cholesky!(Symmetric(ls.A_scratch); check=false)
     if issuccess(cholfac)
-        ldiv!(ls.x, cholfac, ls.b)
-        # Whether a NaN fails the factorization depends on the LAPACK; a non-finite solution does not
-        return all(isfinite, ls.x) ? Success : NotPositiveDefinite
+        ldiv!(cholfac, ls.rhs)
+        return finish_dense!(ls) ? Success : NotPositiveDefinite
     end
     return NotPositiveDefinite
 end
 
 const BlasInt = LinearAlgebra.BlasInt
 
-# Preallocated pivots and LAPACK work array for dense Bunch-Kaufman (`dsytrf`), so the
+# Preallocated pivots and LAPACK work array for dense Bunch-Kaufman (`dsytrf`, `ssytrf`), so the
 # factorization doesn't allocate in the loop
-struct DenseLDLWorkspace
+struct DenseLDLWorkspace{T}
     ipiv::Vector{BlasInt}
-    work::Vector{Float64}
+    work::Vector{T}
 end
-function DenseLDLWorkspace(n::Integer)
-    ipiv = Vector{BlasInt}(undef, n)
-    work = Vector{Float64}(undef, 1)
-    if n > 0
-        # Workspace size query (lwork = -1): only the dimensions are read
-        A = Matrix{Float64}(undef, n, n)
-        info = Ref{BlasInt}()
-        ccall((LinearAlgebra.BLAS.@blasfunc(dsytrf_), LinearAlgebra.BLAS.libblastrampoline), Cvoid,
-              (Ref{UInt8}, Ref{BlasInt}, Ptr{Float64}, Ref{BlasInt},
-               Ptr{BlasInt}, Ptr{Float64}, Ref{BlasInt}, Ref{BlasInt}, Clong),
-              'U', n, A, max(1, n), ipiv, work, BlasInt(-1), info, 1)
-        resize!(work, max(1, Int(work[1])))
-    end
-    return DenseLDLWorkspace(ipiv, work)
-end
+DenseLDLWorkspace(n::Integer) = DenseLDLWorkspace{Float64}(n)
 
-# Bunch-Kaufman factorization of the upper triangle of `A` in place; returns LAPACK's `info`
-# (positive when the block-diagonal factor is exactly singular)
-function sytrf_ws!(A::Matrix{Float64}, ws::DenseLDLWorkspace)
-    n = LinearAlgebra.checksquare(A)
-    length(ws.ipiv) == n || throw(DimensionMismatch("DenseLDLWorkspace is for size $(length(ws.ipiv)), got $n"))
-    n == 0 && return BlasInt(0)
-    info = Ref{BlasInt}()
-    ccall((LinearAlgebra.BLAS.@blasfunc(dsytrf_), LinearAlgebra.BLAS.libblastrampoline), Cvoid,
-          (Ref{UInt8}, Ref{BlasInt}, Ptr{Float64}, Ref{BlasInt},
-           Ptr{BlasInt}, Ptr{Float64}, Ref{BlasInt}, Ref{BlasInt}, Clong),
-          'U', n, A, max(1, stride(A, 2)), ws.ipiv, ws.work, BlasInt(length(ws.work)), info, 1)
-    LinearAlgebra.LAPACK.chkargsok(info[])
-    return info[]
-end
+for (T, sytrf) in ((Float64, :dsytrf_), (Float32, :ssytrf_))
+    @eval begin
+        function DenseLDLWorkspace{$T}(n::Integer)
+            ipiv = Vector{BlasInt}(undef, n)
+            work = Vector{$T}(undef, 1)
+            if n > 0
+                # Workspace size query (lwork = -1): only the dimensions are read
+                A = Matrix{$T}(undef, n, n)
+                info = Ref{BlasInt}()
+                ccall((LinearAlgebra.BLAS.@blasfunc($sytrf), LinearAlgebra.BLAS.libblastrampoline), Cvoid,
+                      (Ref{UInt8}, Ref{BlasInt}, Ptr{$T}, Ref{BlasInt},
+                       Ptr{BlasInt}, Ptr{$T}, Ref{BlasInt}, Ref{BlasInt}, Clong),
+                      'U', n, A, max(1, n), ipiv, work, BlasInt(-1), info, 1)
+                resize!(work, max(1, Int(work[1])))
+            end
+            return DenseLDLWorkspace{$T}(ipiv, work)
+        end
 
-function solve!(ls::DenseLinearSystem{Float64, DenseLDLWorkspace}, ::StaticSymbol{:ldl})
-    copyto!(ls.A_scratch, ls.A)
-    if ls.lambda > 0
-        if isnothing(ls.scaling)
-            uniformscaling!(ls.A_scratch, ls.lambda)
-        else
-            damp_marquardt!(ls.A_scratch, ls.scaling, ls.lambda)
+        # Bunch-Kaufman factorization of the upper triangle of `A` in place; returns LAPACK's `info`
+        # (positive when the block-diagonal factor is exactly singular)
+        function sytrf_ws!(A::Matrix{$T}, ws::DenseLDLWorkspace{$T})
+            n = LinearAlgebra.checksquare(A)
+            length(ws.ipiv) == n || throw(DimensionMismatch("DenseLDLWorkspace is for size $(length(ws.ipiv)), got $n"))
+            n == 0 && return BlasInt(0)
+            info = Ref{BlasInt}()
+            ccall((LinearAlgebra.BLAS.@blasfunc($sytrf), LinearAlgebra.BLAS.libblastrampoline), Cvoid,
+                  (Ref{UInt8}, Ref{BlasInt}, Ptr{$T}, Ref{BlasInt},
+                   Ptr{BlasInt}, Ptr{$T}, Ref{BlasInt}, Ref{BlasInt}, Clong),
+                  'U', n, A, max(1, stride(A, 2)), ws.ipiv, ws.work, BlasInt(length(ws.work)), info, 1)
+            LinearAlgebra.LAPACK.chkargsok(info[])
+            return info[]
         end
     end
+end
+
+function solve!(ls::DenseLinearSystem{T, DenseLDLWorkspace{T}}, ::StaticSymbol{:ldl}) where T
+    prepare_dense!(ls)
     sytrf_ws!(ls.A_scratch, ls.solver_ws) == 0 || return NotPositiveDefinite
-    copyto!(ls.x, ls.b)
-    LinearAlgebra.LAPACK.sytrs!('U', ls.A_scratch, ls.solver_ws.ipiv, ls.x)
-    all(isfinite, ls.x) || return NotPositiveDefinite
+    LinearAlgebra.LAPACK.sytrs!('U', ls.A_scratch, ls.solver_ws.ipiv, ls.rhs)
+    finish_dense!(ls) || return NotPositiveDefinite
     return is_indefinite_packed(ls.A_scratch, ls.solver_ws.ipiv, 'U') ? Indefinite : Success
 end
 
 # Without a preallocated workspace (a system not built by `makehessiansystem`)
 function solve!(ls::DenseLinearSystem, ::StaticSymbol{:ldl})
-    copyto!(ls.A_scratch, ls.A)
-    if ls.lambda > 0
-        if isnothing(ls.scaling)
-            uniformscaling!(ls.A_scratch, ls.lambda)
-        else
-            damp_marquardt!(ls.A_scratch, ls.scaling, ls.lambda)
-        end
-    end
+    prepare_dense!(ls)
     bk = bunchkaufman!(Symmetric(ls.A_scratch); check=false)
     if issuccess(bk)
-        ldiv!(ls.x, bk, ls.b)
-        all(isfinite, ls.x) || return NotPositiveDefinite
+        ldiv!(bk, ls.rhs)
+        finish_dense!(ls) || return NotPositiveDefinite
         if is_indefinite(bk)
             return Indefinite
         end
@@ -296,21 +300,16 @@ function solve!(ls::DenseLinearSystem, ::StaticSymbol{:ldl})
 end
 
 function solve!(ls::DenseLinearSystem, ::StaticSymbol{:qr})
-    copyto!(ls.A_scratch, ls.A)
-    if ls.lambda > 0
-        if isnothing(ls.scaling)
-            uniformscaling!(ls.A_scratch, ls.lambda)
-        else
-            damp_marquardt!(ls.A_scratch, ls.scaling, ls.lambda)
-        end
-    end
+    prepare_dense!(ls)
     qrfac = qr!(ls.A_scratch, ColumnNorm())
-    ldiv!(ls.x, qrfac, ls.b)
-    return all(isfinite, ls.x) ? Success : NotPositiveDefinite
+    ldiv!(qrfac, ls.rhs)
+    return finish_dense!(ls) ? Success : NotPositiveDefinite
 end
 
-# SparseLinearSystem
-function solve!(ls::SparseLinearSystem, ::Union{StaticSymbol{:auto}, StaticSymbol{:ldl}})
+# SparseLinearSystem. The damping is added to A's diagonal in place and the undamped diagonal restored
+# after the factorization (`restore_diag!`); the right-hand side is narrowed into `rhs`, and the solution
+# (in `rhs` or `sol`) widened into `x`.
+function damp_sparse!(ls::SparseLinearSystem)
     if ls.lambda > 0
         if isnothing(ls.scaling)
             uniformscaling!(ls, ls.lambda)
@@ -318,14 +317,25 @@ function solve!(ls::SparseLinearSystem, ::Union{StaticSymbol{:auto}, StaticSymbo
             damp_marquardt!(ls, ls.scaling, ls.lambda)
         end
     end
-    F = ldl_factorize!(ls.A, ls.solver_ws)
+    return ls
+end
+function restore_diag!(ls::SparseLinearSystem)
     if ls.lambda > 0
         @inbounds for (i, idx) in enumerate(ls.diag_inds)
             ls.A.nzval[idx] = ls.diag_cache[i]
         end
     end
+    return ls
+end
+
+function solve!(ls::SparseLinearSystem, ::Union{StaticSymbol{:auto}, StaticSymbol{:ldl}})
+    damp_sparse!(ls)
+    F = ldl_factorize!(ls.A, ls.solver_ws)
+    restore_diag!(ls)
     if LDLFactorizations.factorized(F)
-        ldiv!(ls.x, F, ls.b)
+        copyto!(ls.rhs, ls.b)
+        ldiv!(F, ls.rhs)
+        copyto!(ls.x, ls.rhs)
         all(isfinite, ls.x) || return NotPositiveDefinite
         if is_indefinite(F)
             return Indefinite
@@ -340,41 +350,28 @@ function solve!(ls::SparseLinearSystem, ::StaticSymbol{:cholesky})
         shift_val = Float64(ls.lambda)
         cholfac = cholesky!(ls.solver_ws, Symmetric(ls.A, :U); shift=shift_val, check=false)
     else
-        if ls.lambda > 0
-            damp_marquardt!(ls, ls.scaling, ls.lambda)
-        end
+        damp_sparse!(ls)
         cholfac = cholesky!(ls.solver_ws, Symmetric(ls.A, :U); check=false)
-        if ls.lambda > 0
-            @inbounds for (i, idx) in enumerate(ls.diag_inds)
-                ls.A.nzval[idx] = ls.diag_cache[i]
-            end
-        end
+        restore_diag!(ls)
     end
     if issuccess(cholfac)
+        copyto!(ls.rhs, ls.b)
         @static if VERSION >= v"1.12.0-"   # COV_EXCL_LINE: Julia 1.10 counts this line, but it runs at macro expansion
-            ldiv!(ls.x, cholfac, ls.b)   # in place; this method first appears in Julia 1.12
+            ldiv!(ls.sol, cholfac, ls.rhs)   # in place; this method first appears in Julia 1.12
         else
-            ls.x .= cholfac \ ls.b
+            ls.sol .= cholfac \ ls.rhs
         end
+        copyto!(ls.x, ls.sol)
         return all(isfinite, ls.x) ? Success : NotPositiveDefinite
     end
     return NotPositiveDefinite
 end
 
 function solve!(ls::SparseLinearSystem, ::StaticSymbol{:qr})
-    if ls.lambda > 0
-        if isnothing(ls.scaling)
-            uniformscaling!(ls, ls.lambda)
-        else
-            damp_marquardt!(ls, ls.scaling, ls.lambda)
-        end
-    end
-    ls.x .= qr(ls.A) \ ls.b
-    if ls.lambda > 0
-        @inbounds for (i, idx) in enumerate(ls.diag_inds)
-            ls.A.nzval[idx] = ls.diag_cache[i]
-        end
-    end
+    damp_sparse!(ls)
+    copyto!(ls.rhs, ls.b)
+    ls.x .= qr(ls.A) \ ls.rhs
+    restore_diag!(ls)
     return all(isfinite, ls.x) ? Success : NotPositiveDefinite
 end
 

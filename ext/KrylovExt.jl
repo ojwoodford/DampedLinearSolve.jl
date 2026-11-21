@@ -42,8 +42,8 @@ makesparsews(A, ::StaticSymbol{:cg}) = JacobiWorkspace(Krylov.CgWorkspace(A, zer
 makesparsews(A, ::StaticSymbol{:minres}) = JacobiWorkspace(Krylov.MinresWorkspace(A, zeros(eltype(A), size(A, 1))), size(A, 1))
 
 # Preallocated workspace creation for DenseLinearSystem
-makedensews(n, ::StaticSymbol{:cg}) = Krylov.CgWorkspace(n, n, Vector{Float64})
-makedensews(n, ::StaticSymbol{:minres}) = Krylov.MinresWorkspace(n, n, Vector{Float64})
+makedensews(n, ::StaticSymbol{:cg}, ::Type{Float64}) = Krylov.CgWorkspace(n, n, Vector{Float64})
+makedensews(n, ::StaticSymbol{:minres}, ::Type{Float64}) = Krylov.MinresWorkspace(n, n, Vector{Float64})
 
 builtfor(::JacobiWorkspace{<:Krylov.CgWorkspace}) = ":cg"
 builtfor(::JacobiWorkspace{<:Krylov.MinresWorkspace}) = ":minres"

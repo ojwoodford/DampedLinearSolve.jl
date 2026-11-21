@@ -30,6 +30,9 @@ export check_linear_system, conformance_matrix, conformance_fill!, conformance_f
 # Utilities
 include("utils.jl")
 
+# The element types a system is built in, and which solver offers which
+include("precision.jl")
+
 # The contract, and the systems with a square Hessian: static, dense and sparse
 include("linearsystem.jl")
 include("linearsolver.jl")
