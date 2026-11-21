@@ -13,7 +13,7 @@ sp_allocs(ls, s) = (solve!(ls, s); @allocated solve!(ls, s))
 
 # The solvers that offer Float32 for each kind of Hessian system, on this Julia version
 const SP_SPARSE32 = Float32 <: SparseArrays.CHOLMOD.VTypes
-sp_sparse_solvers() = SP_SPARSE32 ? (:auto, :cholesky, :ldl, :qr) : (:auto, :ldl)
+sp_sparse_solvers() = SP_SPARSE32 ? (:auto, :cholesky, :ldl) : (:auto, :ldl)
 
 # The damped references: undamped, Levenberg λI and Marquardt λ·Diagonal(s)
 const SP_DAMPINGS = ((0.0, nothing), (0.37, nothing), (2.9, [1.0 + i / SP_N for i in 1:SP_N]))
@@ -119,12 +119,11 @@ end
             err = try makehessiansystem(H, :auto); nothing catch e; e end
             @test err isa ArgumentError && occursin("Float64 or Float32", err.msg)
         end
-        # The sparse system's SuiteSparse solvers, where this SparseArrays has them in Float64 only
-        if !SP_SPARSE32
-            for s in (:cholesky, :qr)
-                err = try makehessiansystem(sparse(A32), s); nothing catch e; e end
-                @test err isa ArgumentError && occursin("does not offer Float32", err.msg) && occursin(":auto and :ldl", err.msg)
-            end
+        # The sparse system's SuiteSparse solvers: CHOLMOD where this SparseArrays has it in Float64 only; SPQR always
+        for s in (SP_SPARSE32 ? (:qr,) : (:cholesky, :qr))
+            err = try makehessiansystem(sparse(A32), s); nothing catch e; e end
+            @test err isa ArgumentError && occursin("does not offer Float32", err.msg) &&
+                  occursin(SP_SPARSE32 ? ":auto, :cholesky and :ldl" : ":auto and :ldl", err.msg)
         end
         # A solver name no built-in system takes in Float32 (an extension's, before the extension offers it)
         err = try makehessiansystem(copy(A32), :not_a_solver); nothing catch e; e end
@@ -135,3 +134,96 @@ end
     end
 end
 
+# A Jacobian system in Float32: J (and [J r], R, JᵀJ and their factorizations) in Float32; r, b = Jᵀr, x and the
+# queries in Float64. The reference is the Float64 least-squares solution of the Float64 J and r.
+sp_jacobian(m, n) = [sin(0.9 * i + 1.1 * j + 0.2 * i * j) + (i == j ? 2.0 : 0.0) for i in 1:m, j in 1:n]
+sp_residual(m) = [cos(0.7 * i) for i in 1:m]
+function sp_check_jacobian_solves(ls, s, J64, r)
+    n = size(J64, 2)
+    for (λ, sc0) in SP_DAMPINGS
+        sc = isnothing(sc0) ? nothing : sc0[1:n]
+        dampen!(ls, λ, sc)
+        @test solve!(ls, s) == Success
+        A = J64' * J64 + λ * (isnothing(sc) ? I : Diagonal(sc))
+        @test sp_relerr(getx(ls), A \ (J64' * r)) <= 8 * n * eps(Float32) * sqrt(cond(A)) * cond(J64)
+    end
+end
+sp_fill!(ls, J32, r) = (getJ(getA(ls)) .= J32; getr(getA(ls)) .= r; gradient!(getb(ls), getA(ls)); markstale!(getA(ls)); ls)
+
+@testset "precision.jl: Jacobian systems" begin
+    m, n = 9, SP_N
+    J64, r = sp_jacobian(m, n), sp_residual(m)
+    J32 = Float32.(J64)
+
+    @testset "dense" begin
+        for s in (:auto, :qr, :cholesky, :ldl)
+            ls = makejacobiansystem(zeros(Float32, m, n), n, s)
+            @test ls isa DLS.DenseJacobianLinearSystem{<:Any, Float32}
+            A = getA(ls)
+            @test eltype(getJ(A)) === Float32 && eltype(getr(A)) === Float64 && eltype(getb(ls)) === Float64 && eltype(getx(ls)) === Float64
+            if s in (:auto, :qr)
+                @test eltype(A.ws.scratch.Jr) === Float32 && eltype(A.ws.scratch.S) === Float32 && eltype(A.ws.scratch.work) === Float32
+            else
+                @test ls.solver_ws.hs isa DLS.DenseLinearSystem{Float32}
+            end
+            sp_fill!(ls, J32, r)
+            @test getb(ls) ≈ Float64.(J32)' * r rtol = 1e-14   # the gradient, accumulated in Float64
+            sp_check_jacobian_solves(ls, static(s), J64, r)
+            dampen!(ls, 0.37)
+            @test sp_allocs(ls, static(s)) == 0
+            @test max_diag(ls) isa Float64 && max_diag(ls) == maximum(sum(abs2, Float64.(J32); dims = 1))
+            @test quadform(A, r[1:n]) ≈ sum(abs2, Float64.(J32) * r[1:n]) rtol = 1e-13
+            t = copy_structure(ls)
+            @test t isa typeof(ls) && getJ(getA(t)) == getJ(A) && getJ(getA(t)) !== getJ(A)
+        end
+        # Fewer residuals than variables, undamped: not solved as definite, in Float32 too
+        ls = makejacobiansystem(zeros(Float32, 3, n), n, :qr)
+        sp_fill!(ls, Float32.(sp_jacobian(3, n)), sp_residual(3))
+        dampen!(ls, 0.0)
+        @test solve!(ls, :qr) == NotPositiveDefinite
+        # A NaN in J is reported, and x set to NaN
+        ls = makejacobiansystem(zeros(Float32, m, n), n, :auto)
+        J = copy(J32); J[2, 3] = NaN32
+        sp_fill!(ls, J, r)
+        @test solve!(ls, :auto) == NotPositiveDefinite && all(isnan, getx(ls))
+        @test !isfinitesystem(ls)
+    end
+
+    @testset "static" begin
+        ms, ns = 6, 4
+        Js, rs = Float32.(sp_jacobian(ms, ns)), sp_residual(ms)
+        for s in (:auto, :qr)
+            ls = makejacobiansystem(zeros(Float32, ms, ns), static(ns), s)
+            @test ls isa DLS.StaticJacobianLinearSystem{ms, ns, ms * ns, ns, ns * ns, Float32}
+            @test eltype(getJ(getA(ls))) === Float32 && eltype(ls.R) === Float32 && eltype(getx(ls)) === Float64
+            sp_fill!(ls, Js, rs)
+            sp_check_jacobian_solves(ls, static(s), sp_jacobian(ms, ns), rs)
+            @test sp_allocs(ls, static(s)) == 0
+            t = copy_structure(ls)
+            @test t isa typeof(ls)
+        end
+    end
+
+    @testset "sparse" begin
+        Jsp = sparse(J32)
+        # SPQR is Float64 only, on every Julia version (precision.jl)
+        for s in (:auto, :qr)
+            err = try makejacobiansystem(copy(Jsp), n, s); nothing catch e; e end
+            @test err isa ArgumentError && occursin("does not offer Float32 for a sparse Jacobian system", err.msg) && occursin("SPQR", err.msg)
+        end
+        @test max_diag(DLS.SparseJacobianLinearSystem(copy(Jsp); linsolver = :not_a_solver)) isa Float64
+    end
+
+    @testset "decision 10, and other element types" begin
+        for J in (Float16.(J64), BigFloat.(J64))
+            err = try makejacobiansystem(J, n, :auto); nothing catch e; e end
+            @test err isa ArgumentError && occursin("Float64 or Float32", err.msg)
+            err = try checkjacobian(J); nothing catch e; e end
+            @test err isa ArgumentError && occursin("Float64 or Float32", err.msg)
+        end
+        @test checkjacobian(J32) === nothing && checkjacobian(sparse(J32)) === nothing
+        err = try makejacobiansystem(zeros(Float32, m, n), n, :not_a_solver); nothing catch e; e end
+        @test err isa ArgumentError && occursin("does not offer Float32 for a dense Jacobian system", err.msg)
+        @test makejacobiansystem(m, n, :auto) isa DLS.DenseJacobianLinearSystem{<:Any, Float64}
+    end
+end

@@ -232,9 +232,9 @@ normal_mismatch_message(ls, s) = try solve!(ls, s); "" catch e; e isa ArgumentEr
             err = try check_jacobian_linsolver(Js, s); nothing catch e; e end
             @test err isa ArgumentError
             @test occursin("linsolver = :$s is not supported by the Jacobian system of a SparseMatrixCSC{Float64, Int64}", err.msg)
-            @test occursin("a Matrix{Float64} prototype or an integer m also takes :cholesky or :ldl", err.msg)
+            @test occursin("a Matrix prototype or an integer m also takes :cholesky or :ldl", err.msg)
         end
-        for (J, s) in ((Jd, :pardiso), (4, :cg), (true, :cholesky), (zeros(Float32, 3, 2), :ldl))
+        for (J, s) in ((Jd, :pardiso), (4, :cg), (true, :cholesky), (zeros(Float16, 3, 2), :ldl))
             @test_throws ArgumentError check_jacobian_linsolver(J, s)
         end
     end

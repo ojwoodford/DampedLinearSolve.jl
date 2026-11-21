@@ -107,8 +107,8 @@ SparseJacobianWorkspace(spqr, J::SparseMatrixCSC) = SparseJacobianWorkspace(spqr
 The Hessian storage of a [`SparseJacobianLinearSystem`](@ref): the sparse Jacobian `J` (`m × n`) and
 the residual `r` (length `m`), standing for `A = JᵀJ`, which is never formed.
 """
-struct SparseJacobianStorage
-    J::SparseMatrixCSC{Float64, Int}
+struct SparseJacobianStorage{T}
+    J::SparseMatrixCSC{T, Int}
     r::Vector{Float64}
     Jv::Vector{Float64}           # scratch for quadform
     ws::SparseJacobianWorkspace
@@ -128,7 +128,7 @@ function checkpattern(A::SparseJacobianStorage)
 end
 
 # y = J v, accumulated column by column over the stored entries: plain loops (rules.md 23)
-function jmul!(y::AbstractVector, J::SparseMatrixCSC{Float64, Int}, v::AbstractVector)
+function jmul!(y::AbstractVector, J::SparseMatrixCSC{<:Union{Float64, Float32}, Int}, v::AbstractVector)
     fill!(y, 0.0)   # each entry of J v sums over a row's stored entries, so it starts from zero
     rv, nzv = rowvals(J), nonzeros(J)
     @inbounds for j in axes(J, 2)
@@ -151,7 +151,7 @@ function quadform(A::SparseJacobianStorage, v::AbstractVector)
 end
 
 # g = Jᵀ r, one sparse dot product per column (rules.md 23)
-function jtr!(g::AbstractVector, J::SparseMatrixCSC{Float64, Int}, r::Vector{Float64})
+function jtr!(g::AbstractVector, J::SparseMatrixCSC{<:Union{Float64, Float32}, Int}, r::Vector{Float64})
     rv, nzv = rowvals(J), nonzeros(J)
     @inbounds for j in axes(J, 2)
         total = 0.0
@@ -170,7 +170,8 @@ function colnorms2!(A::SparseJacobianStorage)
         @inbounds for j in axes(A.J, 2)
             total = 0.0
             for q in nzrange(A.J, j)
-                total += nzv[q] * nzv[q]
+                v = Float64(nzv[q])
+                total += v * v
             end
             ws.colnorm2[j] = total
         end
@@ -211,22 +212,28 @@ tolerance, and a `NaN` or `Inf` in `J` or `r` returns `NotPositiveDefinite` with
 stores: writing any other entry inserts it, which changes the pattern, and `gradient!` throws an
 `ArgumentError`.
 """
-mutable struct SparseJacobianLinearSystem{W} <: AbstractJacobianLinearSystem
-    const A::SparseJacobianStorage
+mutable struct SparseJacobianLinearSystem{W, T} <: AbstractJacobianLinearSystem
+    const A::SparseJacobianStorage{T}
     const b::Vector{Float64}
     const x::Vector{Float64}
     const solver_ws::W            # an iterative solver's workspace (`makejacobianws`), or nothing for SPQR
     lambda::Float64
     scaling::Union{Nothing, Vector{Float64}}
 end
-function SparseJacobianLinearSystem(J::SparseMatrixCSC{Float64, Int}; linsolver = :auto)
+# `T` is the element type of J: SPQR (`:auto`, `:qr`) is Float64 only (precision.jl), an iterative solver may offer
+# Float32
+function SparseJacobianLinearSystem(J::SparseMatrixCSC{T, Int}; linsolver = :auto) where T
     m, n = size(J)
     spqr = needsqr(linsolver) ? SPQRWorkspace(J) : nothing   # an iterative solver needs no analysis
     A = SparseJacobianStorage(J, zeros(m), zeros(m), SparseJacobianWorkspace(spqr, J))
-    return SparseJacobianLinearSystem(A, zeros(n), zeros(n), makejacobianws(m, n, linsolver), 0.0, nothing)
+    return SparseJacobianLinearSystem(A, zeros(n), zeros(n), makejacobianws(m, n, linsolver, T), 0.0, nothing)
 end
 
-makejacobiansystem(J::SparseMatrixCSC{Float64, Int}, n, linsolver) = SparseJacobianLinearSystem(J; linsolver)
+function makejacobiansystem(J::SparseMatrixCSC{T, Int}, n, linsolver) where T
+    check_eltype(T, "The sparse Jacobian prototype")
+    check_offers(T, :jacobian_sparse, linsolver)
+    return SparseJacobianLinearSystem(J; linsolver)
+end
 isfinitesystem(ls::SparseJacobianLinearSystem) = all(isfinite, nonzeros(ls.A.J)) && all(isfinite, ls.A.r)
 
 zero!(ls::SparseJacobianLinearSystem) = (fill!(ls.b, 0.0); markstale!(ls.A); ls)

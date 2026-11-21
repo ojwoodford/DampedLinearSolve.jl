@@ -62,14 +62,14 @@ conformance_traits(A) = (exact = true, maxrank = typemax(Int), indefinite = true
 # as resjac! does, and like resjac! it does not mark the factorization stale: the checker fills
 # only fresh systems, or after zero!, so a zero! that left the old factorization in place is caught.
 conformance_matrix(A::JacobianStorage) = conformance_gram(A.J)
-# JᵀJ, summed in row order (as `sqcolnorm` sums), so its diagonal equals the column norms exactly
+# JᵀJ, summed in row order and in Float64 (as `sqcolnorm` sums), so its diagonal equals the column norms exactly
 function conformance_gram(J::AbstractMatrix)
     n = size(J, 2)
     M = Matrix{Float64}(undef, n, n)
     @inbounds for j in 1:n, i in 1:n
         total = 0.0
         for k in axes(J, 1)
-            total += J[k, i] * J[k, j]
+            total += Float64(J[k, i]) * Float64(J[k, j])
         end
         M[i, j] = total
     end

@@ -9,10 +9,13 @@ function check_eltype(::Type{T}, what::AbstractString) where T
     return nothing
 end
 
-# Whether SuiteSparse's CHOLMOD and SPQR, as this Julia's SparseArrays binds them, compute in single precision. A
-# fact about the library (checked by building and solving, on Julia 1.10 and on the release): before it offers Float32
-# it converts a Float32 matrix to Float64, which would be a silent substitution and an allocation.
-const SUITESPARSE_SINGLE = Float32 <: SparseArrays.CHOLMOD.VTypes
+# Whether SuiteSparse's CHOLMOD, as this Julia's SparseArrays binds it, factorizes in single precision. A fact about
+# the library, checked by building and solving on Julia 1.10 and 1.13: SparseArrays 1.10 converts a Float32 matrix to
+# Float64 (a silent substitution, and an allocation); SparseArrays 1.13 factorizes it in Float32.
+const CHOLMOD_SINGLE = Float32 <: SparseArrays.CHOLMOD.VTypes
+# SPQR offers Float32 on neither: SparseArrays 1.13's `qr` of a Float32 matrix converts it to Float64 and back, and
+# SuiteSparseQR_C called on a single-precision matrix (CHOLMOD_SINGLE) fails its rank estimate. So the sparse Hessian
+# system's `:qr` and the sparse Jacobian system's SPQR (`:auto`, `:qr`) are Float64 only.
 
 # The kinds of system, for decision 10's table of which solver offers which element type
 #   :static, :dense, :sparse                 Hessian systems
@@ -38,8 +41,7 @@ offers_eltype(::Type{Float32}, ::Val{:jacobian_static}, ::Union{StaticSymbol{:au
 offers_eltype(::Type{Float32}, ::Val{:jacobian_dense}, ::GenericDirect) = true
 # Sparse: LDLᵀ is LDLFactorizations (generic); CHOLMOD (:cholesky) and SPQR (:qr) are SuiteSparse
 offers_eltype(::Type{Float32}, ::Val{:sparse}, ::Union{StaticSymbol{:auto}, StaticSymbol{:ldl}}) = true
-offers_eltype(::Type{Float32}, ::Val{:sparse}, ::Union{StaticSymbol{:cholesky}, StaticSymbol{:qr}}) = SUITESPARSE_SINGLE
-offers_eltype(::Type{Float32}, ::Val{:jacobian_sparse}, ::Union{StaticSymbol{:auto}, StaticSymbol{:qr}}) = SUITESPARSE_SINGLE
+offers_eltype(::Type{Float32}, ::Val{:sparse}, ::StaticSymbol{:cholesky}) = CHOLMOD_SINGLE
 
 const SYSTEM_KIND_NAMES = (static = "static Hessian system", dense = "dense Hessian system", sparse = "sparse Hessian system",
     jacobian_static = "static Jacobian system", jacobian_dense = "dense Jacobian system", jacobian_sparse = "sparse Jacobian system")
@@ -50,8 +52,8 @@ function check_offers(::Type{T}, kind::Symbol, linsolver) where T
     offers_eltype(T, kind, linsolver) && return nothing
     s = linsolver_symbol(linsolver)
     ok = [x for x in system_solvers(Val(kind)) if validatelinsolver(x) && offers_eltype(T, kind, x)]
-    why = s in (:cholesky, :qr, :auto) && kind in (:sparse, :jacobian_sparse) && !SUITESPARSE_SINGLE ?
-        " (SuiteSparse's CHOLMOD and SPQR are Float64 only in SparseArrays $(pkgversion(SparseArrays)), on Julia $VERSION)" : ""
+    why = (s === :cholesky && kind === :sparse) ? " (CHOLMOD is Float64 only in SparseArrays $(pkgversion(SparseArrays)), on Julia $VERSION)" :
+          ((s === :qr && kind === :sparse) || (s in (:auto, :qr) && kind === :jacobian_sparse)) ? " (SuiteSparse's SPQR is Float64 only)" : ""
     throw(ArgumentError("linsolver = :$s does not offer $T for a $(SYSTEM_KIND_NAMES[kind])$why. " *
         (isempty(ok) ? "No loaded solver offers $T for it." : "The solvers that offer $T for it are $(join((":$x" for x in ok), ", ", " and ")).") *
         " A Float64 prototype gives a Float64 system, which every solver offers."))

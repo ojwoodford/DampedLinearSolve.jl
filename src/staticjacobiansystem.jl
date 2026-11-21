@@ -25,8 +25,8 @@ usesstaticjacobian(m::Integer, n, linsolver) = n isa StaticInt && needsqr(linsol
 The Hessian storage of a [`StaticJacobianLinearSystem`](@ref): `J` (an `MMatrix{M, N}`) and `r` (an
 `MVector{M}`), standing for `A = JᵀJ`, which is never formed.
 """
-struct StaticJacobianStorage{M, N, MN}
-    J::MMatrix{M, N, Float64, MN}
+struct StaticJacobianStorage{M, N, MN, T}
+    J::MMatrix{M, N, T, MN}
     r::MVector{M, Float64}
     colnorm2::MVector{N, Float64}     # squared column norms of J, the diagonal of JᵀJ
     stale::Base.RefValue{Bool}         # the factorization (R, q) is out of date
@@ -45,7 +45,7 @@ function jmul!(y::AbstractVector, J::MMatrix, v::AbstractVector)
     @inbounds for i in 1:m
         total = 0.0
         for j in 1:n
-            total += J[i, j] * v[j]
+            total += Float64(J[i, j]) * v[j]
         end
         y[i] = total
     end
@@ -56,7 +56,7 @@ function jtr!(g::AbstractVector, J::MMatrix, r::AbstractVector)
     @inbounds for j in 1:n
         total = 0.0
         for i in 1:m
-            total += J[i, j] * r[i]
+            total += Float64(J[i, j]) * r[i]
         end
         g[j] = total
     end
@@ -69,7 +69,7 @@ function quadform(A::StaticJacobianStorage{M, N}, v::AbstractVector) where {M, N
     @inbounds for i in 1:M
         s = 0.0
         for j in 1:N
-            s += J[i, j] * v[j]
+            s += Float64(J[i, j]) * v[j]
         end
         total += s * s
     end
@@ -81,7 +81,8 @@ function colnorms2!(A::StaticJacobianStorage{M, N}) where {M, N}
         @inbounds for j in 1:N
             total = 0.0
             for i in 1:M
-                total += A.J[i, j] * A.J[i, j]
+                Jij = Float64(A.J[i, j])
+                total += Jij * Jij
             end
             A.colnorm2[j] = total
         end
@@ -104,32 +105,32 @@ The Jacobian system of [`DenseJacobianLinearSystem`](@ref), with `J` an `MMatrix
 by StaticArrays, for problems with `M·N ≤ MAX_STATIC_JACOBIAN`. Same solves, statuses and damping floor. `R` and
 `q` (`K = min(M, N)` rows) are kept per linearization.
 """
-mutable struct StaticJacobianLinearSystem{M, N, MN, K, KN} <: AbstractJacobianLinearSystem
-    const A::StaticJacobianStorage{M, N, MN}
+mutable struct StaticJacobianLinearSystem{M, N, MN, K, KN, T} <: AbstractJacobianLinearSystem
+    const A::StaticJacobianStorage{M, N, MN, T}
     const b::MVector{N, Float64}
     const x::MVector{N, Float64}
-    const R::MMatrix{K, N, Float64, KN}
-    const q::MVector{K, Float64}
+    const R::MMatrix{K, N, T, KN}
+    const q::MVector{K, T}
     nonfinite::Bool
     lambda::Float64
     scaling::Union{Nothing, MVector{N, Float64}, Vector{Float64}}
 end
-function StaticJacobianLinearSystem(J::MMatrix{M, N}) where {M, N}
+function StaticJacobianLinearSystem(J::MMatrix{M, N, T}) where {M, N, T}
     K = min(M, N)
-    return StaticJacobianLinearSystem{M, N, M * N, K, K * N}(StaticJacobianStorage(J), zeros(MVector{N, Float64}), zeros(MVector{N, Float64}),
-                                                        zeros(MMatrix{K, N, Float64, K * N}), zeros(MVector{K, Float64}), false, 0.0, nothing)
+    return StaticJacobianLinearSystem{M, N, M * N, K, K * N, T}(StaticJacobianStorage(J), zeros(MVector{N, Float64}), zeros(MVector{N, Float64}),
+                                                        zeros(MMatrix{K, N, T, K * N}), zeros(MVector{K, T}), false, 0.0, nothing)
 end
 isfinitesystem(ls::StaticJacobianLinearSystem) = all(isfinite, ls.A.J) && all(isfinite, ls.A.r)
-StaticJacobianLinearSystem(J::Matrix{Float64}) = StaticJacobianLinearSystem(MMatrix{size(J, 1), size(J, 2), Float64}(J))
+StaticJacobianLinearSystem(J::Matrix{T}) where T = StaticJacobianLinearSystem(MMatrix{size(J, 1), size(J, 2), T}(J))
 
 zero!(ls::StaticJacobianLinearSystem) = (fill!(ls.b, 0.0); markstale!(ls.A); ls)
 
-function copy_structure(ls::StaticJacobianLinearSystem{M, N, MN, K, KN}) where {M, N, MN, K, KN}
-    return StaticJacobianLinearSystem{M, N, MN, K, KN}(StaticJacobianStorage(copy(ls.A.J)), zeros(MVector{N, Float64}), ls.x,
-                                                  zeros(MMatrix{K, N, Float64, KN}), zeros(MVector{K, Float64}), false, ls.lambda, ls.scaling)
+function copy_structure(ls::StaticJacobianLinearSystem{M, N, MN, K, KN, T}) where {M, N, MN, K, KN, T}
+    return StaticJacobianLinearSystem{M, N, MN, K, KN, T}(StaticJacobianStorage(copy(ls.A.J)), zeros(MVector{N, Float64}), ls.x,
+                                                  zeros(MMatrix{K, N, T, KN}), zeros(MVector{K, T}), false, ls.lambda, ls.scaling)
 end
-sharex(ls::StaticJacobianLinearSystem{M, N, MN, K, KN}, from) where {M, N, MN, K, KN} = ls.x === from.x ? ls :
-    StaticJacobianLinearSystem{M, N, MN, K, KN}(ls.A, ls.b, from.x, ls.R, ls.q, ls.nonfinite, ls.lambda, ls.scaling)
+sharex(ls::StaticJacobianLinearSystem{M, N, MN, K, KN, T}, from) where {M, N, MN, K, KN, T} = ls.x === from.x ? ls :
+    StaticJacobianLinearSystem{M, N, MN, K, KN, T}(ls.A, ls.b, from.x, ls.R, ls.q, ls.nonfinite, ls.lambda, ls.scaling)
 
 gradient!(g::AbstractVector, A::StaticJacobianStorage) = jtr!(g, A.J, A.r)
 
@@ -139,9 +140,10 @@ function factor_static!(ls::StaticJacobianLinearSystem{M, N, MN, K}) where {M, N
     A.stale[] = false
     ls.nonfinite = !(all(isfinite, A.J) && all(isfinite, A.r))
     ls.nonfinite && return nothing
-    F = qr(SMatrix(A.J))
+    J = SMatrix(A.J)
+    F = qr(J)
     ls.R .= F.R
-    ls.q .= F.Q' * SVector(A.r)
+    ls.q .= F.Q' * SVector{M, eltype(J)}(A.r)   # r narrowed to the system's element type
     return nothing
 end
 
@@ -157,7 +159,7 @@ end
     return minabs > tol * maxabs
 end
 
-function solve!(ls::StaticJacobianLinearSystem{M, N, MN, K}, ::Union{StaticSymbol{:auto}, StaticSymbol{:qr}}) where {M, N, MN, K}
+function solve!(ls::StaticJacobianLinearSystem{M, N, MN, K, KN, T}, ::Union{StaticSymbol{:auto}, StaticSymbol{:qr}}) where {M, N, MN, K, KN, T}
     ls.A.stale[] && factor_static!(ls)
     if ls.nonfinite
         fill!(ls.x, NaN)
@@ -172,10 +174,10 @@ function solve!(ls::StaticJacobianLinearSystem{M, N, MN, K}, ::Union{StaticSymbo
     end
     scaling = ls.scaling
     d = isnothing(scaling) ? ones(SVector{N, Float64}) : SVector{N, Float64}(scaling)
-    S = vcat(R, SMatrix{N, N, Float64}(Diagonal(sqrt.(lambda .* d))))
+    S = vcat(R, SMatrix{N, N, T}(Diagonal(sqrt.(lambda .* d))))   # the damping, formed in Float64, narrowed to T
     F = qr(S)
     static_fullrank(F.R, K + N, N) || return NotPositiveDefinite
-    qq = F.Q' * vcat(q, zeros(SVector{N, Float64}))
+    qq = F.Q' * vcat(q, zeros(SVector{N, T}))
     ls.x .= UpperTriangular(F.R) \ qq
     return Success
 end

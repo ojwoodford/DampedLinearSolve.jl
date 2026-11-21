@@ -3,56 +3,62 @@
 # stacked matrix [R q; √λ D^½ 0]. With QR (and LSMR) JᵀJ is never formed; the normal-equations
 # solvers, `:cholesky` and `:ldl`, form it once per linearization (jacobiannormalsystem.jl).
 
-# Householder QR of the strided matrix `A` in place (LAPACK `dgeqrf`), with preallocated `tau`
-# and work array, so that it does not allocate
-function geqrf_ws!(A::StridedMatrix{Float64}, tau::Vector{Float64}, work::Vector{Float64})
-    m, n = size(A)
-    length(tau) >= min(m, n) || throw(DimensionMismatch("tau has length $(length(tau)), needs $(min(m, n))"))
-    (m == 0 || n == 0) && return A
-    info = Ref{BlasInt}()
-    ccall((LinearAlgebra.BLAS.@blasfunc(dgeqrf_), LinearAlgebra.BLAS.libblastrampoline), Cvoid,
-          (Ref{BlasInt}, Ref{BlasInt}, Ptr{Float64}, Ref{BlasInt},
-           Ptr{Float64}, Ptr{Float64}, Ref{BlasInt}, Ref{BlasInt}),
-          m, n, A, max(1, stride(A, 2)), tau, work, BlasInt(length(work)), info)
-    LinearAlgebra.LAPACK.chkargsok(info[])
-    return A
-end
-
-# The optimal LAPACK work-array length for `dgeqrf` on an m×n matrix. A workspace query
-# (lwork = -1) reads only the dimensions and lda, and touches neither the matrix nor tau, so
+# Householder QR of the strided matrix `A` in place (LAPACK `dgeqrf`, `sgeqrf`), with preallocated `tau`
+# and work array, so that it does not allocate; and the optimal work-array length for an m×n matrix. A
+# workspace query (lwork = -1) reads only the dimensions and lda, and touches neither the matrix nor tau, so
 # one-element stand-ins are passed for both, with the true m, n and lda.
-function geqrf_worksize(m::Integer, n::Integer)
-    (m == 0 || n == 0) && return 1
-    A = Ref(0.0)
-    tau = Ref(0.0)
-    work = Ref(0.0)
-    info = Ref{BlasInt}()
-    ccall((LinearAlgebra.BLAS.@blasfunc(dgeqrf_), LinearAlgebra.BLAS.libblastrampoline), Cvoid,
-          (Ref{BlasInt}, Ref{BlasInt}, Ref{Float64}, Ref{BlasInt},
-           Ref{Float64}, Ref{Float64}, Ref{BlasInt}, Ref{BlasInt}),
-          m, n, A, max(1, m), tau, work, BlasInt(-1), info)
-    LinearAlgebra.LAPACK.chkargsok(info[])
-    return max(1, Int(work[]))
+for (T, geqrf) in ((Float64, :dgeqrf_), (Float32, :sgeqrf_))
+    @eval begin
+        function geqrf_ws!(A::StridedMatrix{$T}, tau::Vector{$T}, work::Vector{$T})
+            m, n = size(A)
+            length(tau) >= min(m, n) || throw(DimensionMismatch("tau has length $(length(tau)), needs $(min(m, n))"))
+            (m == 0 || n == 0) && return A
+            info = Ref{BlasInt}()
+            ccall((LinearAlgebra.BLAS.@blasfunc($geqrf), LinearAlgebra.BLAS.libblastrampoline), Cvoid,
+                  (Ref{BlasInt}, Ref{BlasInt}, Ptr{$T}, Ref{BlasInt},
+                   Ptr{$T}, Ptr{$T}, Ref{BlasInt}, Ref{BlasInt}),
+                  m, n, A, max(1, stride(A, 2)), tau, work, BlasInt(length(work)), info)
+            LinearAlgebra.LAPACK.chkargsok(info[])
+            return A
+        end
+
+        function geqrf_worksize(m::Integer, n::Integer, ::Type{$T})
+            (m == 0 || n == 0) && return 1
+            A = Ref(zero($T))
+            tau = Ref(zero($T))
+            work = Ref(zero($T))
+            info = Ref{BlasInt}()
+            ccall((LinearAlgebra.BLAS.@blasfunc($geqrf), LinearAlgebra.BLAS.libblastrampoline), Cvoid,
+                  (Ref{BlasInt}, Ref{BlasInt}, Ref{$T}, Ref{BlasInt},
+                   Ref{$T}, Ref{$T}, Ref{BlasInt}, Ref{BlasInt}),
+                  m, n, A, max(1, m), tau, work, BlasInt(-1), info)
+            LinearAlgebra.LAPACK.chkargsok(info[])
+            return max(1, Int(work[]))
+        end
+    end
 end
+geqrf_worksize(m::Integer, n::Integer) = geqrf_worksize(m, n, Float64)
 
 # The factorization scratch: [J r] factored in place, the stacked matrix of the damped solve,
 # and their LAPACK arrays. A system and its `copy_structure` copy share one: only one of them
 # has a live factorization at a time (the trial system is not solved until it becomes the main
 # one). `owner` is the token of the system whose factorization the scratch holds (0: none).
-mutable struct JacobianQRScratch
-    const Jr::Matrix{Float64}     # m × (n+1): [J r], factored in place; R and q = (Qᵀr)[1:k] on top
-    const tau::Vector{Float64}
-    const S::Matrix{Float64}      # 2n × (n+1): [R q; √λ D^½ 0], factored in place per damping
-    const tau2::Vector{Float64}
-    const work::Vector{Float64}
+# In `T`, the system's element type: `r` is narrowed into the last column of `Jr`.
+mutable struct JacobianQRScratch{T}
+    const Jr::Matrix{T}     # m × (n+1): [J r], factored in place; R and q = (Qᵀr)[1:k] on top
+    const tau::Vector{T}
+    const S::Matrix{T}      # 2n × (n+1): [R q; √λ D^½ 0], factored in place per damping
+    const tau2::Vector{T}
+    const work::Vector{T}
     owner::Int
 end
-function JacobianQRScratch(m::Integer, n::Integer)
-    lwork = max(geqrf_worksize(m, n + 1), geqrf_worksize(2n, n + 1))
-    return JacobianQRScratch(Matrix{Float64}(undef, m, n + 1), Vector{Float64}(undef, min(m, n + 1)),
-                         Matrix{Float64}(undef, 2n, n + 1), Vector{Float64}(undef, min(2n, n + 1)),
-                         Vector{Float64}(undef, lwork), 0)
+function JacobianQRScratch{T}(m::Integer, n::Integer) where T
+    lwork = max(geqrf_worksize(m, n + 1, T), geqrf_worksize(2n, n + 1, T))
+    return JacobianQRScratch{T}(Matrix{T}(undef, m, n + 1), Vector{T}(undef, min(m, n + 1)),
+                         Matrix{T}(undef, 2n, n + 1), Vector{T}(undef, min(2n, n + 1)),
+                         Vector{T}(undef, lwork), 0)
 end
+JacobianQRScratch(m::Integer, n::Integer) = JacobianQRScratch{Float64}(m, n)
 
 # The Jacobian systems, dense and sparse: they share the Marquardt scaling (from the squared column
 # norms of J, `colnorms2!`) and the damping floor
@@ -66,8 +72,8 @@ const JACOBIAN_TOKENS = Threads.Atomic{Int}(0)
 # the QR clears `stale`, and computing the column norms clears `normsstale`. The factorization
 # itself is in the (possibly shared) scratch, and is this system's only while the scratch's owner
 # is this system's token: a solve refactors otherwise.
-mutable struct JacobianQRWorkspace
-    const scratch::JacobianQRScratch
+mutable struct JacobianQRWorkspace{T}
+    const scratch::JacobianQRScratch{T}
     const token::Int
     const colnorm2::Vector{Float64}   # n: squared column norms of J, the diagonal of JᵀJ
     stale::Bool
@@ -76,8 +82,8 @@ mutable struct JacobianQRWorkspace
     nfactor::Int                  # number of QR factorizations of [J r], for tests
     nnorms::Int                   # number of column-norm computations, for tests
 end
-JacobianQRWorkspace(scratch::JacobianQRScratch, n::Integer) =
-    JacobianQRWorkspace(scratch, Threads.atomic_add!(JACOBIAN_TOKENS, 1) + 1, Vector{Float64}(undef, n), true, true, false, 0, 0)
+JacobianQRWorkspace(scratch::JacobianQRScratch{T}, n::Integer) where T =
+    JacobianQRWorkspace{T}(scratch, Threads.atomic_add!(JACOBIAN_TOKENS, 1) + 1, Vector{Float64}(undef, n), true, true, false, 0, 0)
 JacobianQRWorkspace(m::Integer, n::Integer) = JacobianQRWorkspace(JacobianQRScratch(m, n), n)
 # Whether the scratch holds this system's current factorization
 factorized(ws::JacobianQRWorkspace) = !ws.stale && ws.scratch.owner == ws.token
@@ -89,13 +95,13 @@ The Hessian storage of a [`DenseJacobianLinearSystem`](@ref): the Jacobian `J` (
 residual `r` (length `m`), standing for `A = JᵀJ`, which is never formed.
 `quadform(A, v)` is `‖J v‖²`, and the diagonal of `A` is the squared column norms of `J`.
 """
-struct JacobianStorage
-    J::Matrix{Float64}
+struct JacobianStorage{T}
+    J::Matrix{T}
     r::Vector{Float64}
     Jv::Vector{Float64}           # scratch for quadform
-    ws::JacobianQRWorkspace
+    ws::JacobianQRWorkspace{T}
 end
-JacobianStorage(J::Matrix{Float64}) = JacobianStorage(J, zeros(size(J, 1)), zeros(size(J, 1)), JacobianQRWorkspace(size(J)...))
+JacobianStorage(J::Matrix{T}) where T = JacobianStorage(J, zeros(size(J, 1)), zeros(size(J, 1)), JacobianQRWorkspace(JacobianQRScratch{T}(size(J)...), size(J, 2)))
 
 Base.size(A::JacobianStorage) = (size(A.J, 2), size(A.J, 2))
 Base.size(A::JacobianStorage, d::Integer) = size(A)[d]
@@ -107,7 +113,7 @@ gradient!(g::AbstractVector, A::JacobianStorage) = jtr!(g, A.J, A.r)
 
 # y = J v, one scaled column at a time: a plain loop, not BLAS gemv, so that per-cost work stays
 # single-threaded (rules.md 23). The first column is written, not added, so y needs no zeroing.
-function jmul!(y::AbstractVector, J::Matrix{Float64}, v::AbstractVector)
+function jmul!(y::AbstractVector, J::Matrix{<:Union{Float64, Float32}}, v::AbstractVector)
     m, n = size(J)
     if n == 0
         fill!(y, 0.0)
@@ -128,7 +134,8 @@ function jmul!(y::AbstractVector, J::Matrix{Float64}, v::AbstractVector)
     return y
 end
 
-# ‖J v‖², with J v formed into the scratch `Jv`
+# ‖J v‖², with J v formed into the scratch `Jv` (Float64: the products of J's entries with a Float64 v
+# promote, so a Float32 J is accumulated in Float64)
 function quadform(A::JacobianStorage, v::AbstractVector)
     size(A.J, 2) == 0 && return 0.0
     Jv = jmul!(A.Jv, A.J, v)
@@ -140,7 +147,7 @@ function quadform(A::JacobianStorage, v::AbstractVector)
 end
 
 # g = Jᵀ r as one dot product per column of J: a plain loop, not BLAS gemv (rules.md 23)
-function jtr!(g::AbstractVector, J::Matrix{Float64}, r::Vector{Float64})
+function jtr!(g::AbstractVector, J::Matrix{<:Union{Float64, Float32}}, r::Vector{Float64})
     m, n = size(J)
     @inbounds for j in 1:n
         total = 0.0
@@ -153,10 +160,11 @@ function jtr!(g::AbstractVector, J::Matrix{Float64}, r::Vector{Float64})
 end
 
 # Squared norm of column j of J, summed in row order (as `conformance_matrix` sums), so the two agree exactly
-@inline function sqcolnorm(J::Matrix{Float64}, j::Integer)
+@inline function sqcolnorm(J::Matrix, j::Integer)
     total = 0.0
     @inbounds for i in axes(J, 1)
-        total += J[i, j] * J[i, j]
+        Jij = Float64(J[i, j])
+        total += Jij * Jij
     end
     return total
 end
@@ -236,18 +244,19 @@ ill-conditioned `J`; `:auto` is QR. Rank deficiency is reported only as the fact
 `eps(Float64)`, as for a factorization of a Hessian. A system is solved with the solver it was built
 for: QR or LSMR asked of a system built for `:cholesky`, or the reverse, is an `ArgumentError`.
 """
-mutable struct DenseJacobianLinearSystem{W} <: AbstractJacobianLinearSystem
-    const A::JacobianStorage
+mutable struct DenseJacobianLinearSystem{W, T} <: AbstractJacobianLinearSystem
+    const A::JacobianStorage{T}
     const b::Vector{Float64}      # the gradient Jᵀr
     const x::Vector{Float64}
     const solver_ws::W            # the workspace of an iterative solver or of the normal equations (`makejacobianws`), or nothing for QR
     lambda::Float64
     scaling::Union{Nothing, Vector{Float64}}
 end
-function DenseJacobianLinearSystem(J::Matrix{Float64}; linsolver = :auto)
+# `T`, the element type of J, is the system's: J, the factorization and its scratch are in T
+function DenseJacobianLinearSystem(J::Matrix{T}; linsolver = :auto) where T
     m, n = size(J)
-    A = JacobianStorage(J, zeros(m), zeros(m), JacobianQRWorkspace(qrscratch(m, n, linsolver), n))
-    return DenseJacobianLinearSystem(A, zeros(n), zeros(n), makejacobianws(m, n, linsolver), 0.0, nothing)
+    A = JacobianStorage(J, zeros(m), zeros(m), JacobianQRWorkspace(qrscratch(m, n, linsolver, T), n))
+    return DenseJacobianLinearSystem(A, zeros(n), zeros(n), makejacobianws(m, n, linsolver, T), 0.0, nothing)
 end
 DenseJacobianLinearSystem(m::Integer, n::Integer; linsolver = :auto) = DenseJacobianLinearSystem(zeros(Float64, m, n); linsolver)
 isfinitesystem(ls::DenseJacobianLinearSystem) = all(isfinite, ls.A.J) && all(isfinite, ls.A.r)
@@ -256,13 +265,13 @@ isfinitesystem(ls::DenseJacobianLinearSystem) = all(isfinite, ls.A.J) && all(isf
 # equations (`:cholesky`, `:ldl`, jacobiannormalsystem.jl) in this package, and those an extension adds
 # through `makejacobianws` (LSMR, in KrylovExt), which builds the solver's workspace
 needsqr(linsolver) = linsolver_symbol(linsolver) in (:auto, :qr)
-makejacobianws(m, n, linsolver) = makejacobianws(m, n, static(linsolver_symbol(linsolver)))
-makejacobianws(m, n, ::StaticSymbol) = nothing
+makejacobianws(m, n, linsolver, ::Type{T}=Float64) where T = makejacobianws(m, n, static(linsolver_symbol(linsolver)), T)
+makejacobianws(m, n, ::StaticSymbol, ::Type) = nothing
 # The QR scratch of the dense system: [J r] and the stacked matrix for QR; an iterative solver keeps
 # only the empty scratch's owner token
-qrscratch(m, n, linsolver) = qrscratch(m, n, static(linsolver_symbol(linsolver)))
-qrscratch(m, n, ::Union{StaticSymbol{:auto}, StaticSymbol{:qr}}) = JacobianQRScratch(m, n)
-qrscratch(m, n, ::StaticSymbol) = JacobianQRScratch(0, n)
+qrscratch(m, n, linsolver, ::Type{T}=Float64) where T = qrscratch(m, n, static(linsolver_symbol(linsolver)), T)
+qrscratch(m, n, ::Union{StaticSymbol{:auto}, StaticSymbol{:qr}}, ::Type{T}) where T = JacobianQRScratch{T}(m, n)
+qrscratch(m, n, ::StaticSymbol, ::Type{T}) where T = JacobianQRScratch{T}(0, n)
 
 # LSMR's stopping tolerances, for LSMR on J (KrylovExt). Starting values, not measured (rules.md 26;
 # improvements.md item 5):
@@ -280,12 +289,19 @@ const LSMR_CONLIM = 1 / sqrt(eps(Float64))
 # A small problem with a static number of variables (`n` a `StaticInt`) gets the static system
 # (staticjacobiansystem.jl). The choice depends on m, known only at run time, so it is made here, once,
 # when the system is built.
+# The element type of a Matrix prototype is the system's (Float64 or Float32); with an integer m it is Float64. A solver
+# that does not offer it is an ArgumentError here (decision 10).
 function makejacobiansystem(m::Integer, n, linsolver)
     usesstaticjacobian(m, n, linsolver) && return StaticJacobianLinearSystem(zeros(MMatrix{Int(m), dynamic(n), Float64}))
     return DenseJacobianLinearSystem(m, dynamic(n); linsolver)
 end
-function makejacobiansystem(J::Matrix{Float64}, n, linsolver)
-    usesstaticjacobian(size(J, 1), n, linsolver) && return StaticJacobianLinearSystem(J)
+function makejacobiansystem(J::Matrix{T}, n, linsolver) where T
+    check_eltype(T, "The Jacobian prototype")
+    if usesstaticjacobian(size(J, 1), n, linsolver)
+        check_offers(T, :jacobian_static, linsolver)
+        return StaticJacobianLinearSystem(J)
+    end
+    check_offers(T, :jacobian_dense, linsolver)
     return DenseJacobianLinearSystem(J; linsolver)
 end
 
@@ -323,7 +339,7 @@ function factor_jacobian!(A::JacobianStorage)
     ws.nonfinite && return nothing
     Jr = sc.Jr
     copyto!(view(Jr, :, 1:n), J)
-    copyto!(view(Jr, :, n + 1), r)
+    copyto!(view(Jr, :, n + 1), r)   # narrowed to the scratch's element type
     geqrf_ws!(Jr, sc.tau, sc.work)
     ws.nfactor += 1
     return nothing
@@ -333,7 +349,7 @@ end
 # size(R, 1) rows): the smallest |R[i,i]| must exceed max(rows, n)·eps times the largest. A
 # threshold of n·eps alone misses an exactly duplicated column of a J with more rows than columns, whose R[i,i] is left
 # at the rounding error of the Householder reflections, which grows with the number of rows.
-function fullrank_upper(R::Matrix{Float64}, n::Integer)
+function fullrank_upper(R::Matrix, n::Integer)
     tol = max(size(R, 1), n) * eps(Float64)
     maxabs = 0.0
     minabs = Inf
@@ -346,7 +362,7 @@ function fullrank_upper(R::Matrix{Float64}, n::Integer)
 end
 
 # x = U \ x for the upper triangle U = R[1:n, 1:n], column-oriented
-function backsubstitute!(x::Vector{Float64}, R::Matrix{Float64}, n::Integer)
+function backsubstitute!(x::AbstractVector, R::Matrix, n::Integer)
     @inbounds for j in n:-1:1
         x[j] /= R[j, j]
         xj = x[j]
@@ -418,22 +434,23 @@ dampingfloor(ls::AbstractJacobianLinearSystem) = eps(Float64)^2
 getdiag!(d::AbstractVector, ls::AbstractJacobianLinearSystem) = copyto!(d, colnorms2!(ls.A))
 
 # The Jacobian prototypes the Jacobian systems are built from: their checks, size and solvers
-const JACOBIAN_SUPPORT = "A Jacobian system is built from a Matrix{Float64} or SparseMatrixCSC{Float64, Int} Jacobian prototype or an integer number of residuals m;" *
-    " each takes linsolver = :auto or :qr, or :lsmr with Krylov.jl loaded, and a Matrix{Float64} prototype or an integer m also takes :cholesky or :ldl (the normal equations, JᵀJ formed from J);" *
+const JACOBIAN_SUPPORT = "A Jacobian system is built from a Matrix or SparseMatrixCSC{T, Int} Jacobian prototype, with T = Float64 or Float32 (the system's element type), or an integer number of residuals m (Float64);" *
+    " each takes linsolver = :auto or :qr, or :lsmr with Krylov.jl loaded, and a Matrix prototype or an integer m also takes :cholesky or :ldl (the normal equations, JᵀJ formed from J);" *
     " a package that implements the linear-system contract for its own prototype adds it (BlockLinearSystems.jl adds SchurBlockJacobian)"
 
-# The Jacobian prototype: a Matrix{Float64} with at least one row, or an integer m >= 1
+# The Jacobian prototype: a Matrix{Float64} or Matrix{Float32} with at least one row, the sparse matrix of either, or
+# an integer m >= 1
 function checkjacobian(J)
     if J isa Integer && !(J isa Bool)
         J >= 1 || throw(ArgumentError("The number of residuals m must be at least 1; got $J. $JACOBIAN_SUPPORT."))
-    elseif J isa Matrix{Float64}
+    elseif J isa Union{Matrix{Float64}, Matrix{Float32}}
         size(J, 1) >= 1 || throw(ArgumentError("The Jacobian prototype has no rows (size $(size(J))): it needs one row per residual. $JACOBIAN_SUPPORT."))
-    elseif J isa SparseMatrixCSC{Float64, Int}
+    elseif J isa Union{SparseMatrixCSC{Float64, Int}, SparseMatrixCSC{Float32, Int}}
         size(J, 1) >= 1 || throw(ArgumentError("The Jacobian prototype has no rows (size $(size(J))): it needs one row per residual. $JACOBIAN_SUPPORT."))
     elseif J isa AbstractSparseMatrix
         throw(ArgumentError("A sparse Jacobian prototype of type $(typeof(J)) is not supported. $JACOBIAN_SUPPORT."))
-    elseif J isa AbstractMatrix && eltype(J) !== Float64
-        throw(ArgumentError("The Jacobian must be Float64; got a prototype with element type $(eltype(J)). $JACOBIAN_SUPPORT."))
+    elseif J isa AbstractMatrix && !(eltype(J) in SYSTEM_ELTYPES)
+        throw(ArgumentError("The Jacobian must be Float64 or Float32; got a prototype with element type $(eltype(J)). $JACOBIAN_SUPPORT."))
     else
         throw(ArgumentError("A Jacobian prototype of type $(typeof(J)) is not supported. $JACOBIAN_SUPPORT."))
     end
@@ -453,4 +470,4 @@ function check_jacobian_linsolver(J, s::Symbol)
     throw(ArgumentError("linsolver = :$s is not supported by the Jacobian system of a $(typeof(J)) Jacobian prototype. $JACOBIAN_SUPPORT."))
 end
 # The prototypes of the dense Jacobian system, which alone takes the normal-equations solvers
-densejacobianprototype(J) = (J isa Integer && !(J isa Bool)) || J isa Matrix{Float64}
+densejacobianprototype(J) = (J isa Integer && !(J isa Bool)) || J isa Union{Matrix{Float64}, Matrix{Float32}}
