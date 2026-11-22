@@ -91,15 +91,18 @@ function free_dense!(ws::SPQRWorkspace, D::Ptr{LSS.cholmod_dense})
     return nothing
 end
 
-# The per-system state: squared column norms of J and whether they are current
+# The per-system state: squared column norms of J and whether they are current; the conditioning scale of the
+# current fill (conditioning.jl), computed at the first SPQR solve after `markstale!` (`scalestale`)
 mutable struct SparseJacobianWorkspace
     const spqr::Union{Nothing, SPQRWorkspace}   # nothing for an iterative solver
     const colnorm2::Vector{Float64}
+    const cs::Vector{Float64}
     const nnzJ::Int               # stored entries of J, which resjac! must not change
     normsstale::Bool
+    scalestale::Bool
     nfactor::Int                  # number of SPQR numeric factorizations, for tests
 end
-SparseJacobianWorkspace(spqr, J::SparseMatrixCSC) = SparseJacobianWorkspace(spqr, Vector{Float64}(undef, size(J, 2)), nnz(J), true, 0)
+SparseJacobianWorkspace(spqr, J::SparseMatrixCSC) = SparseJacobianWorkspace(spqr, Vector{Float64}(undef, size(J, 2)), ones(size(J, 2)), nnz(J), true, true, 0)
 
 """
     SparseJacobianStorage
@@ -116,7 +119,7 @@ end
 
 Base.size(A::SparseJacobianStorage) = (size(A.J, 2), size(A.J, 2))
 Base.size(A::SparseJacobianStorage, d::Integer) = size(A)[d]
-markstale!(A::SparseJacobianStorage) = (A.ws.normsstale = true; A)
+markstale!(A::SparseJacobianStorage) = (A.ws.normsstale = true; A.ws.scalestale = true; A)
 getJ(A::SparseJacobianStorage) = A.J
 getr(A::SparseJacobianStorage) = A.r
 
@@ -217,7 +220,6 @@ mutable struct SparseJacobianLinearSystem{W, T} <: AbstractJacobianLinearSystem
     const b::Vector{Float64}
     const x::Vector{Float64}
     const solver_ws::W            # an iterative solver's workspace (`makejacobianws`), or nothing for SPQR
-    const cs::Vector{Float64}     # the conditioning scale of the last SPQR solve, shared with a copy_structure copy
     const condition::Bool         # the internal switch of the conditioning (conditioning.jl)
     lambda::Float64
     scaling::Union{Nothing, Vector{Float64}}
@@ -228,7 +230,7 @@ function SparseJacobianLinearSystem(J::SparseMatrixCSC{T, Int}; linsolver = :aut
     m, n = size(J)
     spqr = needsqr(linsolver) ? SPQRWorkspace(J) : nothing   # an iterative solver needs no analysis
     A = SparseJacobianStorage(J, zeros(m), zeros(m), SparseJacobianWorkspace(spqr, J))
-    return SparseJacobianLinearSystem(A, zeros(n), zeros(n), makejacobianws(m, n, linsolver, T, condition), ones(n), condition, 0.0, nothing)
+    return SparseJacobianLinearSystem(A, zeros(n), zeros(n), makejacobianws(m, n, linsolver, T, condition), condition, 0.0, nothing)
 end
 
 makejacobiansystem(J::SparseMatrixCSC, n, linsolver) = jacobiansystem(J, n, linsolver, true)
@@ -249,9 +251,9 @@ function copy_structure(ls::SparseJacobianLinearSystem)
     m, n = size(A.J)
     J = copy(A.J)
     At = SparseJacobianStorage(J, zeros(m), zeros(m), SparseJacobianWorkspace(A.ws.spqr, J))
-    return SparseJacobianLinearSystem(At, zeros(length(ls.b)), ls.x, ls.solver_ws, ls.cs, ls.condition, ls.lambda, ls.scaling)
+    return SparseJacobianLinearSystem(At, zeros(length(ls.b)), ls.x, ls.solver_ws, ls.condition, ls.lambda, ls.scaling)
 end
-sharex(ls::SparseJacobianLinearSystem, from) = ls.x === from.x ? ls : SparseJacobianLinearSystem(ls.A, ls.b, from.x, ls.solver_ws, ls.cs, ls.condition, ls.lambda, ls.scaling)
+sharex(ls::SparseJacobianLinearSystem, from) = ls.x === from.x ? ls : SparseJacobianLinearSystem(ls.A, ls.b, from.x, ls.solver_ws, ls.condition, ls.lambda, ls.scaling)
 
 # The gradient Jᵀr, after checking that the linearization kept J's pattern
 function gradient!(g::AbstractVector, A::SparseJacobianStorage)
@@ -269,11 +271,17 @@ function solve!(ls::SparseJacobianLinearSystem, ::Union{StaticSymbol{:auto}, Sta
     isnothing(sp) && solvermismatch(ls, :qr)
     A.ws.nfactor += 1
     if ls.condition
-        d = colnorms2!(A)
-        @inbounds for j in eachindex(ls.cs)
-            ls.cs[j] = conditioning_scale(d[j], Float64)
+        # SPQR is Float64 only, so a damping row with the stored scale cannot overflow (at most √λ·2^40)
+        cs = A.ws.cs
+        if A.ws.scalestale
+            d = colnorms2!(A)
+            lambda = max(ls.lambda, 0.0)
+            @inbounds for j in eachindex(cs)
+                cs[j] = conditioning_scale(d[j] + damping_entry(lambda, ls.scaling, j), Float64)
+            end
+            A.ws.scalestale = false
         end
-        return spqr_solve!(ls.x, sp, A.J, A.r, max(ls.lambda, 0.0), ls.scaling, ls.cs)
+        return spqr_solve!(ls.x, sp, A.J, A.r, max(ls.lambda, 0.0), ls.scaling, cs)
     end
     return spqr_solve!(ls.x, sp, A.J, A.r, max(ls.lambda, 0.0), ls.scaling)
 end

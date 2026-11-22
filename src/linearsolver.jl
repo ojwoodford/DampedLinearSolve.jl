@@ -203,26 +203,19 @@ end
 
 # DenseLinearSystem. `prepare_dense!` writes the conditioned, damped matrix S(A + λD)S into `A_scratch` and the
 # right-hand side S b into `rhs` (narrowed to `T`); the factorization solves `rhs` in place, and `finish_dense!` widens
-# x = S y into `x`. Unconditioned, S = I. The damping of entry j, λ·D_jj·s_j², is formed in Float64 and added there,
-# and the sum narrowed once.
+# x = S y into `x`. Unconditioned, S = I. Conditioned, each entry s_i·A_ij·s_j, and on the diagonal s_j²·(A_jj + λ·D_jj),
+# is formed in Float64 and narrowed once. The scale is computed at the first solve after a fill (conditioning.jl).
 function prepare_dense!(ls::DenseLinearSystem{T}) where T
     A, M, n = ls.A, ls.A_scratch, length(ls.b)
     lambda, scaling = ls.lambda, ls.scaling
     if ls.condition
         s = ls.cs
-        @inbounds for j in 1:n
-            s[j] = conditioning_scale(A[j, j], T)
-        end
-        @inbounds for j in 1:n
-            sj = T(s[j])
-            for i in 1:n
-                M[i, j] = (A[i, j] * T(s[i])) * sj
-            end
-        end
-        if lambda > 0
-            @inbounds for j in 1:n
-                M[j, j] += (isnothing(scaling) ? lambda : lambda * scaling[j]) * (s[j] * s[j])
-            end
+        fresh = !ls.scalevalid
+        fresh && dense_scale!(ls)
+        if !conditioned_dense!(ls) && !fresh
+            Threads.atomic_add!(RESCALES, 1)
+            dense_scale!(ls)
+            conditioned_dense!(ls)
         end
         @inbounds for i in 1:n
             ls.rhs[i] = s[i] * ls.b[i]
@@ -239,6 +232,33 @@ function prepare_dense!(ls::DenseLinearSystem{T}) where T
         copyto!(ls.rhs, ls.b)
     end
     return ls
+end
+# The scale of the fill at the current damping (decision 13)
+function dense_scale!(ls::DenseLinearSystem{T}) where T
+    lambda, scaling = max(ls.lambda, 0.0), ls.scaling
+    @inbounds for j in eachindex(ls.cs)
+        ls.cs[j] = conditioning_scale(Float64(ls.A[j, j]) + damping_entry(lambda, scaling, j), T)
+    end
+    ls.scalevalid = true
+    return ls
+end
+# S(A + λD)S into `A_scratch`; false if an entry finite in Float64 is not finite in T
+function conditioned_dense!(ls::DenseLinearSystem{T}) where T
+    A, M, s, n = ls.A, ls.A_scratch, ls.cs, length(ls.b)
+    lambda, scaling = ls.lambda, ls.scaling
+    ok = true
+    @inbounds for j in 1:n
+        sj = s[j]
+        for i in 1:n
+            v = (Float64(A[i, j]) * s[i]) * sj
+            if i == j && lambda > 0
+                v += damping_entry(lambda, scaling, j) * (sj * sj)
+            end
+            ok &= !overflows(v, T)
+            M[i, j] = v
+        end
+    end
+    return ok
 end
 # x from the solved `rhs`; a non-finite solution is a failed solve (whether a NaN fails a factorization
 # depends on the LAPACK)
@@ -343,23 +363,16 @@ end
 # the solution `y`. A is never written.
 function prepare_sparse!(ls::SparseLinearSystem{T}) where T
     A, w, n = ls.A, nonzeros(ls.Aw), length(ls.b)
-    nzv, rv = nonzeros(A), rowvals(A)
+    nzv = nonzeros(A)
     lambda, scaling = ls.lambda, ls.scaling
     if ls.condition
         s = ls.cs
-        @inbounds for (j, idx) in enumerate(ls.diag_inds)
-            s[j] = conditioning_scale(nzv[idx], T)
-        end
-        @inbounds for j in 1:n
-            sj = T(s[j])
-            for k in nzrange(A, j)
-                w[k] = (nzv[k] * T(s[rv[k]])) * sj
-            end
-        end
-        if lambda > 0
-            @inbounds for (j, idx) in enumerate(ls.diag_inds)
-                w[idx] += (isnothing(scaling) ? lambda : lambda * scaling[j]) * (s[j] * s[j])
-            end
+        fresh = !ls.scalevalid
+        fresh && sparse_scale!(ls)
+        if !conditioned_sparse!(ls) && !fresh
+            Threads.atomic_add!(RESCALES, 1)
+            sparse_scale!(ls)
+            conditioned_sparse!(ls)
         end
         @inbounds for i in 1:n
             ls.rhs[i] = s[i] * ls.b[i]
@@ -374,6 +387,33 @@ function prepare_sparse!(ls::SparseLinearSystem{T}) where T
         copyto!(ls.rhs, ls.b)
     end
     return ls
+end
+function sparse_scale!(ls::SparseLinearSystem{T}) where T
+    lambda, scaling, nzv = max(ls.lambda, 0.0), ls.scaling, nonzeros(ls.A)
+    @inbounds for (j, idx) in enumerate(ls.diag_inds)
+        ls.cs[j] = conditioning_scale(Float64(nzv[idx]) + damping_entry(lambda, scaling, j), T)
+    end
+    ls.scalevalid = true
+    return ls
+end
+function conditioned_sparse!(ls::SparseLinearSystem{T}) where T
+    A, w, s, n = ls.A, nonzeros(ls.Aw), ls.cs, length(ls.b)
+    nzv, rv = nonzeros(A), rowvals(A)
+    lambda, scaling = ls.lambda, ls.scaling
+    ok = true
+    @inbounds for j in 1:n
+        sj = s[j]
+        dj = ls.diag_inds[j]
+        for k in nzrange(A, j)
+            v = (Float64(nzv[k]) * s[rv[k]]) * sj
+            if k == dj && lambda > 0
+                v += damping_entry(lambda, scaling, j) * (sj * sj)
+            end
+            ok &= !overflows(v, T)
+            w[k] = v
+        end
+    end
+    return ok
 end
 function finish_sparse!(ls::SparseLinearSystem, y::AbstractVector)
     if ls.condition

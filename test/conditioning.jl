@@ -24,17 +24,20 @@ cd_jacobian_cases(::Type{Float32}) = [(J -> Float32.(J), s) for s in (:auto, :qr
 const CD_DAMPINGS = ((0.0, nothing), (0.37, nothing), (2.9, [1.0 + i / CD_N for i in 1:CD_N]))
 
 @testset "conditioning.jl" begin
-    @testset "the scale: 1/(1 + √d), the nearest power of two" begin
-        for d in (0.0, 0.5, 1.0, 3.0, 8.0, 1e6, 1e-12, 1e12, 3e38)
+    @testset "the scale: 1/(1e-12 + √d), the nearest power of two" begin
+        for d in (0.0, 0.5, 1.0, 3.0, 8.0, 1e6, 1e-12, 1e-30, 1e12, 3e38)
             s = DLS.conditioning_scale(d, Float64)
-            @test ispow2(s) && s <= 1
-            @test abs(log2(s) - log2(1 / (1 + sqrt(d)))) <= 0.5
+            @test ispow2(s)
+            @test abs(log2(s) - log2(1 / (1e-12 + sqrt(d)))) <= 0.5
         end
-        @test DLS.conditioning_scale(0.0, Float64) == 1.0
-        @test DLS.conditioning_scale(8.0, Float64) == 0.25   # 1/(1 + 2.83) = 0.261
-        for d in (-1.0, NaN, Inf, -Inf)
+        @test DLS.conditioning_scale(0.0, Float64) == 2.0^40   # 1/1e-12 = 2^39.86
+        @test DLS.conditioning_scale(1.0, Float64) == 1.0
+        @test DLS.conditioning_scale(6.0, Float64) == 0.5   # 1/2.45 = 2^-1.29
+        @test DLS.conditioning_scale(1e-6, Float32) == 1024.0
+        for d in (NaN, Inf, -Inf)
             @test DLS.conditioning_scale(d, Float32) == 1.0
         end
+        @test DLS.conditioning_scale(-6.0, Float64) == 0.5 && DLS.conditioning_scale(-1e-6, Float32) == 1024.0   # by |d|
         # at least floatmin(T): a normal number in the system's element type
         @test DLS.conditioning_scale(1e300, Float32) == floatmin(Float32)
         @test ispow2(DLS.conditioning_scale(1e300, Float64)) && DLS.conditioning_scale(1e300, Float64) < 1e-149
@@ -133,17 +136,11 @@ const CD_DAMPINGS = ((0.0, nothing), (0.37, nothing), (2.9, [1.0 + i / CD_N for 
             getb(on) .= b; getb(off) .= b
             @test solve!(on, s) == Success && solve!(off, s) == Success
             if s === :qr
-                # Pivoted QR: the scale 1/(1 + √d) never scales a weak variable up (s ≤ 1), so the conditioned diagonal
-                # still spans 1e-12 to 1, and Float32's pivoted QR does not meet the reference (single-precision.md,
-                # Status): measured componentwise error 1.0. In Float64 conditioning is what makes it meet it
-                # (2.5e-11 on; 1.0 off, observed).
-                if T === Float64
-                    @test cd_relcomp(getx(on), ref) <= 1e-9
-                    @test cd_relcomp(getx(off), ref) > 0.1
-                else
-                    @test_broken cd_relcomp(getx(on), ref) <= tol(T)
-                    @test cd_relcomp(getx(off), ref) > 0.1
-                end
+                # Pivoted QR: conditioned, the diagonal is about 1 (decision 13's scale scales weak variables up), and
+                # the solve meets the reference in either type; off, the column order follows the unscaled diagonal and
+                # it does not (componentwise error 1.0, observed)
+                @test cd_relcomp(getx(on), ref) <= (T === Float64 ? 1e-9 : tol(T))
+                @test cd_relcomp(getx(off), ref) > 0.1
             else
                 @test cd_relcomp(getx(on), ref) <= tol(T)
                 @test getx(off) == getx(on)   # observed: no difference
@@ -167,6 +164,80 @@ const CD_DAMPINGS = ((0.0, nothing), (0.37, nothing), (2.9, [1.0 + i / CD_N for 
                 @test cd_relcomp(getx(off), jref) <= jtol(T)
             end
         end
+    end
+
+    # Decision 13: the scale is computed at the first solve after a fill, from the damped diagonal, and reused for later
+    # dampings. A zero diagonal entry and one of 1e-30, solved undamped first (scales 2^40), then at λ = 1e16: the
+    # stored scale would put λ·s² = 1.2e40 beyond floatmax(Float32), so the scale is recomputed at that damping (the
+    # writer's proposal, conditioning.jl); then a first solve at λ₀ > 0 followed by 1e20·λ₀. Finite status and x.
+    @testset "a zero and a tiny diagonal entry, then a large damping, $T" for T in (Float64, Float32)
+        Az = copy(A64)
+        Az[1, :] .= 0; Az[:, 1] .= 0; Az[2, :] .= 0; Az[:, 2] .= 0
+        Az[2, 2] = 1e-30
+        Jz = copy(J64); Jz[:, 1] .= 0; Jz[:, 2] .= 0; Jz[1, 2] = 1e-15
+        for (make, s) in cd_hessian_cases(T)
+            ls = makehessiansystem(make(Az), s)
+            getb(ls) .= b
+            n0 = DLS.RESCALES[]
+            dampen!(ls, 0.0); solve!(ls, s)
+            dampen!(ls, 1e16)
+            @test solve!(ls, s) in (Success, Indefinite) && all(isfinite, getx(ls))
+            T === Float32 && @test DLS.RESCALES[] > n0   # reached in Float32 only
+            T === Float64 && @test DLS.RESCALES[] == n0
+            # after the rescale the system keeps the new scale: an earlier damping of the same fill still solves
+            dampen!(ls, 1e16); x1 = copy(getx(ls)); solve!(ls, s)
+            @test getx(ls) == x1
+            for λ0 in (1e-6, 1e-20)
+                ls = makehessiansystem(make(Az), s)
+                getb(ls) .= b
+                dampen!(ls, λ0)
+                @test solve!(ls, s) in (Success, Indefinite) && all(isfinite, getx(ls))
+                dampen!(ls, 1e20 * λ0)
+                @test solve!(ls, s) in (Success, Indefinite) && all(isfinite, getx(ls))
+            end
+            (s in (:auto, :ldl) || (s === :cholesky && getA(ls) isa Matrix)) && @test cd_allocs(ls, static(s)) == 0
+        end
+        for (make, s) in cd_jacobian_cases(T)
+            ls = makejacobiansystem(make(Jz), CD_N, s)
+            # Not met for the Float32 QR (single-precision.md, Status of the continuation): no entry overflows, so the
+            # scale is not recomputed, but with the stored scale the damping rows of the two weak columns are about 1e12
+            # times the others', and the rank test (relative to eps(Float32) times the largest |R_ii|) reads the damped
+            # system as rank deficient: NotPositiveDefinite, observed, where λ = 1e16 and λ = 1 (after λ₀ = 1e-20) are
+            # 1e16 and 1e20 times the damping the scale was computed at. Float64's rank test passes.
+            qr32 = T === Float32 && s in (:auto, :qr)
+            cd_fillj!(ls, Jz, r)
+            dampen!(ls, 0.0); solve!(ls, s)
+            dampen!(ls, 1e16)
+            st = solve!(ls, s)
+            qr32 ? (@test_broken st == Success) : (@test st == Success)
+            @test all(isfinite, getx(ls))
+            for λ0 in (1e-6, 1e-20)
+                cd_fillj!(ls, Jz, r)
+                dampen!(ls, λ0)
+                @test solve!(ls, s) == Success && all(isfinite, getx(ls))
+                dampen!(ls, 1e20 * λ0)
+                st = solve!(ls, s)
+                qr32 && λ0 == 1e-20 ? (@test_broken st == Success) : (@test st == Success)
+                @test all(isfinite, getx(ls))
+            end
+            getJ(getA(ls)) isa Matrix && @test cd_allocs(ls, static(s)) == 0
+        end
+    end
+
+    @testset "the scale is computed once per fill" begin
+        ls = DLS.hessiansystem(copy(A64), :cholesky, true)
+        getb(ls) .= b
+        dampen!(ls, 0.0); solve!(ls, :cholesky); s0 = copy(ls.cs)
+        dampen!(ls, 1e3 * max_diag(ls)); solve!(ls, :cholesky)
+        @test ls.cs == s0   # reused for a later damping
+        zero!(ls); getA(ls) .= A64; getb(ls) .= b
+        solve!(ls, :cholesky)   # first solve of the new fill, at λ₀ = 1e3·max_diag
+        @test ls.cs != s0 && ls.cs == DLS.conditioning_scale.(diag(A64) .+ 1e3 * maximum(diag(A64)), Float64)
+        J = DLS.jacobiansystem(copy(J64), CD_N, :qr, true)
+        cd_fillj!(J, J64, r); dampen!(J, 0.5); solve!(J, :qr); s1 = copy(getA(J).ws.cs)
+        dampen!(J, 50.0); solve!(J, :qr)
+        @test getA(J).ws.cs == s1 && getA(J).ws.nfactor == 1   # not refactorized per damping
+        @test s1 == DLS.conditioning_scale.(vec(sum(abs2, J64; dims = 1)) .+ 0.5, Float64)
     end
 
     @testset "the copies keep the switch" begin

@@ -13,8 +13,8 @@ struct JacobianNormalWorkspace{S, H}
     hs::H
 end
 # In `T`, the element type of J: the product JᵀJ and its factorization
-# Conditioned, the dense Hessian system conditions the product from its diagonal, the squared column norms of J
-# (computed in T), which is (J S)ᵀ(J S)
+# Conditioned, the dense Hessian system conditions the product from its damped diagonal at the first solve after the
+# product is formed (the squared column norms of J, computed in T, plus λ₀·D), which is (J S)ᵀ(J S)
 function JacobianNormalWorkspace{S}(n::Integer, ::Type{T}=Float64, condition::Bool=true) where {S, T}
     hs = hessiansystem(zeros(T, n, n), static(S), condition)
     return JacobianNormalWorkspace{S, typeof(hs)}(hs)
@@ -40,6 +40,7 @@ function form_normal!(ls::NormalJacobianSystem)
     ws.nonfinite && return nothing
     J = A.J
     LinearAlgebra.BLAS.syrk!('U', 'T', one(eltype(J)), J, zero(eltype(J)), ls.solver_ws.hs.A)
+    ls.solver_ws.hs.scalevalid = false   # a new fill of the product: its scale is computed at the next solve
     ws.nfactor += 1
     return nothing
 end

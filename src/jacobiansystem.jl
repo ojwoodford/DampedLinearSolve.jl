@@ -44,21 +44,20 @@ geqrf_worksize(m::Integer, n::Integer) = geqrf_worksize(m, n, Float64)
 # has a live factorization at a time (the trial system is not solved until it becomes the main
 # one). `owner` is the token of the system whose factorization the scratch holds (0: none).
 # In `T`, the system's element type: `r` is narrowed into the last column of `Jr`.
-# Conditioned (conditioning.jl), `Jr` holds [J S r] and `cs` the scale s of the factorization it holds.
+# Conditioned (conditioning.jl), `Jr` holds [J S r], with S the owner's conditioning scale.
 mutable struct JacobianQRScratch{T}
     const Jr::Matrix{T}     # m × (n+1): [J S r], factored in place; R and q = (Qᵀr)[1:k] on top
     const tau::Vector{T}
     const S::Matrix{T}      # 2n × (n+1): [R q; √λ D^½ S 0], factored in place per damping
     const tau2::Vector{T}
     const work::Vector{T}
-    const cs::Vector{Float64}
     owner::Int
 end
 function JacobianQRScratch{T}(m::Integer, n::Integer) where T
     lwork = max(geqrf_worksize(m, n + 1, T), geqrf_worksize(2n, n + 1, T))
     return JacobianQRScratch{T}(Matrix{T}(undef, m, n + 1), Vector{T}(undef, min(m, n + 1)),
                          Matrix{T}(undef, 2n, n + 1), Vector{T}(undef, min(2n, n + 1)),
-                         Vector{T}(undef, lwork), ones(n), 0)
+                         Vector{T}(undef, lwork), 0)
 end
 JacobianQRScratch(m::Integer, n::Integer) = JacobianQRScratch{Float64}(m, n)
 
@@ -73,19 +72,23 @@ const JACOBIAN_TOKENS = Threads.Atomic{Int}(0)
 # `markstale!`, by `zero!` and by the linearization wrapper after `resjac!` has written J and r;
 # the QR clears `stale`, and computing the column norms clears `normsstale`. The factorization
 # itself is in the (possibly shared) scratch, and is this system's only while the scratch's owner
-# is this system's token: a solve refactors otherwise.
+# is this system's token: a solve refactors otherwise. `cs` is the conditioning scale of this system's current fill
+# (conditioning.jl), computed at the first solve after `markstale!` (`scalestale`) from the damping of that solve, and
+# reused when a later solve refactors the same fill.
 mutable struct JacobianQRWorkspace{T}
     const scratch::JacobianQRScratch{T}
     const token::Int
     const colnorm2::Vector{Float64}   # n: squared column norms of J, the diagonal of JᵀJ
+    const cs::Vector{Float64}         # n: the conditioning scale
     stale::Bool
     normsstale::Bool
+    scalestale::Bool
     nonfinite::Bool               # J or r held a NaN or Inf at the last factorization
     nfactor::Int                  # number of QR factorizations of [J r], for tests
     nnorms::Int                   # number of column-norm computations, for tests
 end
 JacobianQRWorkspace(scratch::JacobianQRScratch{T}, n::Integer) where T =
-    JacobianQRWorkspace{T}(scratch, Threads.atomic_add!(JACOBIAN_TOKENS, 1) + 1, Vector{Float64}(undef, n), true, true, false, 0, 0)
+    JacobianQRWorkspace{T}(scratch, Threads.atomic_add!(JACOBIAN_TOKENS, 1) + 1, Vector{Float64}(undef, n), ones(n), true, true, true, false, 0, 0)
 JacobianQRWorkspace(m::Integer, n::Integer) = JacobianQRWorkspace(JacobianQRScratch(m, n), n)
 # Whether the scratch holds this system's current factorization
 factorized(ws::JacobianQRWorkspace) = !ws.stale && ws.scratch.owner == ws.token
@@ -107,7 +110,7 @@ JacobianStorage(J::Matrix{T}) where T = JacobianStorage(J, zeros(size(J, 1)), ze
 
 Base.size(A::JacobianStorage) = (size(A.J, 2), size(A.J, 2))
 Base.size(A::JacobianStorage, d::Integer) = size(A)[d]
-markstale!(A::JacobianStorage) = (A.ws.stale = true; A.ws.normsstale = true; A)
+markstale!(A::JacobianStorage) = (A.ws.stale = true; A.ws.normsstale = true; A.ws.scalestale = true; A)
 # The storage the linearization writes, J and r, and the gradient Jᵀr it then forms
 getJ(A::JacobianStorage) = A.J
 getr(A::JacobianStorage) = A.r
@@ -339,9 +342,10 @@ sharex(ls::DenseJacobianLinearSystem, from) = ls.x === from.x ? ls : DenseJacobi
 
 # QR of [J r]; afterwards Jr[1:k, 1:n] holds R (upper trapezoidal) and Jr[1:k, n+1] holds
 # q = (Qᵀr)[1:k], with k = min(m, n)
-# Conditioned, the columns of J are scaled by s (from the column norms) as they are copied, and s is kept in the
-# scratch with the factorization
-function factor_jacobian!(A::JacobianStorage{T}, condition::Bool) where T
+# Conditioned, the columns of J are scaled by s as they are copied (each entry formed in Float64 and narrowed), s
+# computed, at the first factorization of a fill, from the squared column norms and the damping `lambda`, `scaling`
+# of that solve (decision 13)
+function factor_jacobian!(A::JacobianStorage{T}, condition::Bool, lambda::Float64=0.0, scaling=nothing) where T
     ws = A.ws
     J, r = A.J, A.r
     m, n = size(J)
@@ -352,16 +356,21 @@ function factor_jacobian!(A::JacobianStorage{T}, condition::Bool) where T
     ws.nonfinite && return nothing
     Jr = sc.Jr
     if condition
-        d = colnorms2!(A)
+        if ws.scalestale
+            d = colnorms2!(A)
+            lambda = max(lambda, 0.0)
+            @inbounds for j in 1:n
+                ws.cs[j] = conditioning_scale(d[j] + damping_entry(lambda, scaling, j), T)
+            end
+            ws.scalestale = false
+        end
         @inbounds for j in 1:n
-            sc.cs[j] = conditioning_scale(d[j], T)
-            sj = T(sc.cs[j])
+            sj = ws.cs[j]
             for i in 1:m
-                Jr[i, j] = J[i, j] * sj
+                Jr[i, j] = Float64(J[i, j]) * sj
             end
         end
     else
-        fill!(sc.cs, 1.0)
         copyto!(view(Jr, :, 1:n), J)
     end
     copyto!(view(Jr, :, n + 1), r)   # narrowed to the scratch's element type
@@ -404,7 +413,7 @@ function solve!(ls::DenseJacobianLinearSystem, s::Union{StaticSymbol{:auto}, Sta
     ws = A.ws
     m, n = size(A.J)
     size(ws.scratch.Jr, 1) == m || solvermismatch(ls, dynamic(s))
-    factorized(ws) || factor_jacobian!(A, ls.condition)
+    factorized(ws) || factor_jacobian!(A, ls.condition, ls.lambda, ls.scaling)
     if ws.nonfinite
         fill!(ls.x, NaN)
         return NotPositiveDefinite
@@ -420,8 +429,15 @@ function solve!(ls::DenseJacobianLinearSystem, s::Union{StaticSymbol{:auto}, Sta
             ls.x[i] = Jr[i, n + 1]
         end
         backsubstitute!(ls.x, Jr, n)
-        unscale!(ls.x, sc.cs, ls.condition)
+        unscale!(ls.x, ws.cs, ls.condition)
         return Success
+    end
+    # A damping row entry beyond floatmax(T) with the stored scale: the scale is recomputed at this damping and J
+    # refactorized (conditioning.jl)
+    if ls.condition && damping_rows_overflow(ws.cs, lambda, ls.scaling, systemeltype(ls))
+        Threads.atomic_add!(RESCALES, 1)
+        ws.scalestale = true
+        factor_jacobian!(A, true, lambda, ls.scaling)
     end
     # Damped: QR of [R q; √λ D^½ 0], then back-substitution
     S = sc.S
@@ -434,7 +450,7 @@ function solve!(ls::DenseJacobianLinearSystem, s::Union{StaticSymbol{:auto}, Sta
             S[i, j] = Jr[i, j]
         end
         for i in 1:n
-            S[n + i, i] = sqrt(lambda * (isnothing(scaling) ? 1.0 : scaling[i])) * sc.cs[i]
+            S[n + i, i] = sqrt(lambda * (isnothing(scaling) ? 1.0 : scaling[i])) * (ls.condition ? ws.cs[i] : 1.0)
         end
     end
     geqrf_ws!(S, sc.tau2, sc.work)
@@ -443,8 +459,15 @@ function solve!(ls::DenseJacobianLinearSystem, s::Union{StaticSymbol{:auto}, Sta
         ls.x[i] = S[i, n + 1]
     end
     backsubstitute!(ls.x, S, n)
-    unscale!(ls.x, sc.cs, ls.condition)
+    unscale!(ls.x, ws.cs, ls.condition)
     return Success
+end
+
+function damping_rows_overflow(cs::Vector{Float64}, lambda::Float64, scaling, ::Type{T}) where T
+    @inbounds for i in eachindex(cs)
+        overflows(sqrt(damping_entry(lambda, scaling, i)) * cs[i], T) && return true
+    end
+    return false
 end
 
 # x = S y, for a conditioned solve

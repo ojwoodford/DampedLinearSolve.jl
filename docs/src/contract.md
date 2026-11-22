@@ -162,8 +162,14 @@ Jacobian system factorizes `J S`, with the damping rows `√(λ D_jj)·s_j`, and
 arithmetic `x` is the unconditioned solution, so an optimizer follows the same path with or without it,
 apart from rounding, and its damping, trust region and tests are all in the original variables.
 
-`s_j = 1/(1 + √d_j)`, rounded to the nearest power of two, with `d_j` the diagonal of `A` as filled (for a
-Jacobian system, the squared column norms of `J`); `s_j = 1` where `d_j` is negative or not finite.
+`s_j` is the power of two nearest, on a log scale, to `1/(1e-12 + √|d_j + λ₀·D_jj|)`, with `d_j` the
+diagonal of `A` as filled (for a Jacobian system, the squared column norms of `J`) and `λ₀·D` the damping of
+the first solve after a fill; `s_j = 1` where that is not finite. It is computed once per fill, at that
+first solve, and reused for every later damping of the same fill (a Jacobian system factorizes `J S` once per
+fill, as without conditioning); [`zero!`](@ref) and [`markstale!`](@ref) invalidate it. Each scaled entry is
+formed in `Float64` and narrowed once. Should a later, much larger damping put a scaled entry beyond the
+largest finite `T`, the scale is recomputed at that damping, for that solve and the ones after it. The
+`1e-12` is a starting value.
 Scaling by powers of two is exact, so with no overflow or underflow a factorization that does not pivot
 (Cholesky, LDLᵀ, Householder QR) gives the scaled result of the unconditioned one exactly: what
 conditioning changes is the range of the entries, which matters in `Float32`, and the decisions made by
