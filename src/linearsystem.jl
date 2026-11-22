@@ -236,8 +236,8 @@ function zero!(ls::AbstractLinearSystem)
     return ls
 end
 function zero!(ls::DenseLinearSystem)
-    fill!(ls.b, 0.0)
-    fill!(ls.A, zero(eltype(ls.A)))
+    fill!(getb(ls), zero(eltype(getb(ls))))
+    fill!(getA(ls), zero(eltype(getA(ls))))
     ls.scalevalid = false
     return ls
 end
@@ -274,9 +274,10 @@ copy_structure(ls::SparseLinearSystem{T, Ti, SWS}) where {T, Ti, SWS} = SparseLi
     false
 )
 
+# A system and its sharex form share A, so they share the fill and its conditioning scale
 sharex(ls::StaticLinearSystem{N, N2, T}, from) where {N, N2, T} = ls.x === from.x ? ls : StaticLinearSystem{N, N2, T}(ls.A, ls.b, from.x, ls.lambda, ls.scaling)
-sharex(ls::DenseLinearSystem{T, W}, from) where {T, W} = ls.x === from.x ? ls : DenseLinearSystem{T, W}(ls.A, ls.b, from.x, ls.A_scratch, ls.rhs, copy(ls.cs), ls.condition, ls.solver_ws, ls.lambda, ls.scaling, ls.scalevalid)
-sharex(ls::SparseLinearSystem{T, Ti, SWS}, from) where {T, Ti, SWS} = ls.x === from.x ? ls : SparseLinearSystem{T, Ti, SWS}(ls.A, ls.b, from.x, ls.diag_inds, ls.solver_ws, ls.diag_cache, ls.Aw, ls.rhs, ls.sol, copy(ls.cs), ls.condition, ls.lambda, ls.scaling, ls.scalevalid)
+sharex(ls::DenseLinearSystem{T, W}, from) where {T, W} = ls.x === from.x ? ls : DenseLinearSystem{T, W}(ls.A, ls.b, from.x, ls.A_scratch, ls.rhs, ls.cs, ls.condition, ls.solver_ws, ls.lambda, ls.scaling, ls.scalevalid)
+sharex(ls::SparseLinearSystem{T, Ti, SWS}, from) where {T, Ti, SWS} = ls.x === from.x ? ls : SparseLinearSystem{T, Ti, SWS}(ls.A, ls.b, from.x, ls.diag_inds, ls.solver_ws, ls.diag_cache, ls.Aw, ls.rhs, ls.sol, ls.cs, ls.condition, ls.lambda, ls.scaling, ls.scalevalid)
 
 # Diagonal operations for damping
 function uniformscaling!(A::AbstractMatrix, k)
