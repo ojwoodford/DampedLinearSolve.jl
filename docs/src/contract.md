@@ -149,6 +149,10 @@ The Krylov solvers run in `T` (their vectors in `T`, `b` or `r` narrowed into th
 `√eps(T)` (LSMR's `conlim` `1/√eps(T)`). `:pardiso` is not offered for `Float32`: it could not be checked,
 neither MKL nor Panua Pardiso being available on the machine this was built on.
 
+The `Float32` QR of a dense Jacobian system loses the direction of a heavily damped step: the
+Levenberg step's direction is within 1e-3 of the gradient's up to `λ = 1e7·max_diag` on the package's
+test problem, and 0.065 from it at `1e12·max_diag` (`Float64`: 1e-13), a documented limit of that solver.
+
 The tolerances that compare with rounding in the matrix follow `T`: [`dampingfloor`](@ref) is `eps(T)` or
 `eps(T)^2`, the rank tests of the Jacobian QR use `eps(T)`, and the indefiniteness test of `:ldl` counts a
 pivot as negative below `-rtol` times the largest, with `rtol = 1e-6` for `Float64` and

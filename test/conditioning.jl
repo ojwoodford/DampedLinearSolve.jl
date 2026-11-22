@@ -110,11 +110,17 @@ const CD_DAMPINGS = ((0.0, nothing), (0.37, nothing), (2.9, [1.0 + i / CD_N for 
             g = getb(ls)
             dir = norm(getx(ls) / norm(getx(ls)) - g / norm(g))
             if T === Float32 && s in (:auto, :qr)
-                # Not met (single-precision.md, Status): the damped QR factorizes the stacked [R; √λ D^½ S], whose
-                # rows of R are about 1e-6 of the damping rows here, so the coupling between them is resolved to about
-                # eps(Float32)·1e6. Measured 0.12 on a well-scaled J (1.1e-10 in Float64). Independent of the conditioning.
-                @test_broken dir <= 1e-6
-                @test dir < 0.5
+                # The limit of decision 15: the damped QR factorizes the stacked [R; √λ D^½ S], whose rows of R are small
+                # against the damping rows at a large λ, so their coupling is resolved to about eps(Float32)·λ/max_diag.
+                # Observed at λ = 1e12·max_diag: 0.065 (1e-13 in Float64). The largest power of ten λ/max_diag at which
+                # the direction is within 1e-3 of b on both Julia versions is 1e7 (6.9e-4 on 1.13, 6.1e-4 on 1.10; at
+                # 1e8, 9.9e-4 and 1.1e-3), asserted there; 1e-6 is kept for every other conditioned system.
+                @test dir < 0.2
+                ls7 = makejacobiansystem(make(Js), CD_N, s)
+                cd_fillj!(ls7, Js, r)
+                dampen!(ls7, 1e7 * max_diag(ls7))
+                @test solve!(ls7, s) == Success
+                @test norm(getx(ls7) / norm(getx(ls7)) - g / norm(g)) <= 1e-3
             else
                 @test dir <= 1e-6
             end
