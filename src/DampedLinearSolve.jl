@@ -22,7 +22,7 @@ export makehessiansystem, makejacobiansystem, structurekey
 export checkhessian, checkjacobian, check_jacobian_linsolver, jacobian_ncols, jacobian_nrows
 export checklinsolver, validatelinsolver
 export getA, getb, getx, zero!, getJ, getr, gradient!, markstale!
-export dampen!, solve!, qrfactors
+export dampen!, solve!
 export max_diag, getdiag!, quadform, quadratic_model_change, dampingfloor, isfinitesystem, systemeltype
 export copy_structure, sharex
 export check_linear_system, conformance_matrix, conformance_fill!, conformance_fillb!, conformance_traits
@@ -41,9 +41,7 @@ include("linearsystem.jl")
 include("linearsolver.jl")
 
 # The Jacobian systems: dense, sparse and static
-include("qr_refinement.jl")
 include("jacobiansystem.jl")
-include("qrfactors.jl")
 include("jacobiannormalsystem.jl")
 include("sparsejacobiansystem.jl")
 include("staticjacobiansystem.jl")

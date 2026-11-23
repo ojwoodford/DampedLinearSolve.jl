@@ -133,17 +133,6 @@ result into `x`. The QR of a dense or static Jacobian system keeps the residual 
 `T` reflectors to a `Float64` column, so its step is the least-squares solution for `r` as computed, not as
 rounded to `T`. Whoever fills `A` or `J` writes `T` values.
 
-**Refinement.** In `Float32` the QR solve of a dense Jacobian system (`:auto`, `:qr`) is refined: one step of
-Björck's iterative refinement of the augmented system (the residual carried as an unknown), with the residuals
-formed in `Float64` from `J` as stored, `r`, the scale and the damping, and the correction solved with the `T`
-factors applied in `Float64`. Without it the `Float32` QR's error grows with the residual at the solution (about
-`eps(T)·κ²·‖r‖/(‖J‖‖x‖)`, from the factor's own rounding); one step brings the step's error down by about
-`eps(T)·κ`, two to that of the `Float64` QR on the package's test problems. The one step is a starting value. Not
-refined: `Float64` systems (no refinement code runs, and they hold no refinement storage), the static Jacobian
-system, the normal equations (`:cholesky`, `:ldl`, which solve from the `Float64` gradient), SPQR (`Float64` only)
-and LSMR. The refinement costs two products with `J`, three applications of `Q` or `Qᵀ` (the start's residual, then one each way) and two triangular solves
-per solve, in plain loops, and `2(m + n) + n` `Float64` values of storage.
-
 Whether a solver offers `Float32` is a fact about its library on that Julia version. A solver that does not
 offer the prototype's element type is an `ArgumentError` when the system is built, naming the solvers that
 do: there is no silent substitution, `:auto` included. Checked by building and solving on Julia 1.10
@@ -165,6 +154,13 @@ neither MKL nor Panua Pardiso being available on the machine this was built on.
 The `Float32` QR of a dense Jacobian system loses the direction of a heavily damped step: the
 Levenberg step's direction is within 1e-3 of the gradient's up to `λ = 1e7·max_diag` on the package's
 test problem, and 0.065 from it at `1e12·max_diag` (`Float64`: 1e-13), a documented limit of that solver.
+
+The `Float32` QR solve is not refined, so where the residual at the solution is large against the gradient its error
+is the factor's own, about `eps(T)·κ²·‖r‖/(‖J‖‖x‖)`, which keeping `r` in `Float64` does not remove: with
+`‖Jᵀr‖ = 1e-6·‖J‖·‖r‖`, a relative error in `x` of about 0.1 at `κ(J) = 10` and above 1 at `κ(J) = 1e3` (`Float64`:
+1e-10 and 1e-6). An optimizer then takes rejected steps near the optimum and stops short of the `Float64` solution.
+Iterative refinement in `Float64` (one step of Björck's method) removed the error, but on the bundle adjustments it was
+measured on it cost more than `Float64` did, so it is not done: use `Float64` for such problems.
 
 The tolerances that compare with rounding in the matrix follow `T`: [`dampingfloor`](@ref) is `eps(T)` or
 `eps(T)^2`, the rank tests of the Jacobian QR use `eps(T)`, and the indefiniteness test of `:ldl` counts a
@@ -199,21 +195,6 @@ scaled: the solve scales as it copies into its scratch, and every query reads th
 The static systems are not conditioned, and neither are the Krylov solves: for an iterative solver a
 diagonal scaling is a preconditioner, which changes the iterates by more than rounding. There is no
 public switch.
-
-## The factors of a QR solve
-
-This is **not part of the contract**: no system but the one below offers it, and [`check_linear_system`](@ref) does
-not check it. It is for a caller that refines a larger least-squares problem of which a system's is a part
-(BlockLinearSystems.jl's QR-eliminated systems).
-
-[`qrfactors`](@ref)`(ls)` gives the factors `(Q, R)` of the last QR solve of a dense Jacobian system built for
-`:auto` or `:qr` with `m ≥ n`: `M = Q·[R; 0]` for the matrix the system stands for, as filled, at the damping of
-that solve (`M = J` undamped, `[J; √(λD)]` damped). They are in the system's own variables: the solve factorizes
-`M S = Q R̂` (see [Conditioning](#Conditioning)), and `R = R̂ S⁻¹`, so neither the scale nor its recomputation
-shows. `Q` and `R` support only `lmul!(Q', v)`, `lmul!(Q, v)`, `ldiv!(R, v)` and `ldiv!(R', v)` on `Float64`
-vectors, in `Float64` arithmetic, and `size`. They are valid after a solve that returned `Success` until the next
-`zero!`, `markstale!`, or solve of the system or of one sharing its workspace (`copy_structure`, `sharex`); a
-later `dampen!` does not change them, and they change nothing a later solve reads. Nothing allocates.
 
 ## The spare system
 

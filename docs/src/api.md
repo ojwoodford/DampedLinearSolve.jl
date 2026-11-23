@@ -40,7 +40,6 @@ markstale!
 ```@docs
 dampen!
 solve!
-qrfactors
 SolveStatus
 Success
 NotPositiveDefinite

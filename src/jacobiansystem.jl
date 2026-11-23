@@ -49,9 +49,6 @@ geqrf_worksize(m::Integer, n::Integer) = geqrf_worksize(m, n, Float64)
 # which the T reflectors are applied in Float64 (`apply_reflectors!`): the step is the least-squares solution for
 # the residual as computed, not as rounded to single precision.
 # Conditioned (conditioning.jl), `Jr` holds J S, with S the owner's conditioning scale.
-# `refine` is the storage of the mixed-precision refinement (SP-D11, qr_refinement.jl): a `QRRefinement` for an element
-# type narrower than Float64, `nothing` for Float64, which is not refined (the solve selects the refinement by
-# dispatch on T, so no refinement code runs for Float64).
 mutable struct JacobianQRScratch{T}
     const Jr::Matrix{T}     # m × (n+1) [J S r] (Float64), m × n J S (Float32): factored in place, R on top
     const tau::Vector{T}
@@ -60,7 +57,6 @@ mutable struct JacobianQRScratch{T}
     const work::Vector{T}
     const qv::Vector{Float64}    # Float32: Qᵀr, m (its first k = min(m, n) entries are q); Float64: empty
     const qv2::Vector{Float64}   # Float32: the damped solve's right-hand side [q; 0] and its transform, 2n; Float64: empty
-    const refine::Union{Nothing, QRRefinement}
     owner::Int
 end
 # Whether the residual column is a column of the factored matrices (T = Float64) or a Float64 vector of its own
@@ -70,51 +66,27 @@ function JacobianQRScratch{T}(m::Integer, n::Integer) where T
     c = n + residual_in_table(T)
     lwork = max(geqrf_worksize(m, c, T), geqrf_worksize(2n, c, T))
     nq, nq2 = residual_in_table(T) ? (0, 0) : (m, 2n)
-    refine = qr_refinement(T, m, n)
     return JacobianQRScratch{T}(Matrix{T}(undef, m, c), Vector{T}(undef, min(m, c)),
                          Matrix{T}(undef, 2n, c), Vector{T}(undef, min(2n, c)),
-                         Vector{T}(undef, lwork), Vector{Float64}(undef, nq), Vector{Float64}(undef, nq2), refine, 0)
+                         Vector{T}(undef, lwork), Vector{Float64}(undef, nq), Vector{Float64}(undef, nq2), 0)
 end
 
 # q = Qᵀq for the Householder reflectors of a LAPACK QR (`geqrf`) of `F` (their vectors below the diagonal of the
 # first `k` columns, their factors `tau`): H_k ⋯ H_1 q, each H_j = I − τ_j v_j v_jᵀ with v_j = [0; 1; F[j+1:end, j]],
-# applied in Float64 to a Float64 q from the T entries.
-# Row i of F is entry i of q for i ≤ `split`, and entry i + `off` after it (SP-D12: the damped solve's stacked
-# reflectors applied to rows 1:n and m+1:m+n of a vector of length m + n, with split = n and off = m − n). With the
-# defaults the map is the identity, and the operations and their order are those without it.
-function apply_reflectors!(q::AbstractVector{Float64}, F::Matrix, tau::Vector, k::Integer, split::Integer = size(F, 1), off::Integer = 0)
+# applied in Float64 to a Float64 q from the T entries
+function apply_reflectors!(q::AbstractVector{Float64}, F::Matrix, tau::Vector, k::Integer)
     p = size(F, 1)
     @inbounds for j in 1:k
-        reflect!(q, F, Float64(tau[j]), j, p, split, off)
-    end
-    return q
-end
-# q = Q q for the same reflectors: H_1 ⋯ H_k q, the reflectors applied in reverse order, in Float64
-function apply_reflectors_reverse!(q::AbstractVector{Float64}, F::Matrix, tau::Vector, k::Integer, split::Integer = size(F, 1), off::Integer = 0)
-    p = size(F, 1)
-    @inbounds for j in k:-1:1
-        reflect!(q, F, Float64(tau[j]), j, p, split, off)
-    end
-    return q
-end
-# q = H_j q, for the reflector of column j (rows j:p of F, through the row map; j ≤ split)
-@inline function reflect!(q::AbstractVector{Float64}, F::Matrix, t::Float64, j::Integer, p::Integer, split::Integer, off::Integer)
-    iszero(t) && return q
-    @inbounds begin
+        t = Float64(tau[j])
+        iszero(t) && continue
         w = q[j]
-        for i in j+1:split
+        for i in j+1:p
             w += Float64(F[i, j]) * q[i]
-        end
-        for i in split+1:p
-            w += Float64(F[i, j]) * q[i + off]
         end
         w *= t
         q[j] -= w
-        for i in j+1:split
+        for i in j+1:p
             q[i] -= w * Float64(F[i, j])
-        end
-        for i in split+1:p
-            q[i + off] -= w * Float64(F[i, j])
         end
     end
     return q
@@ -147,11 +119,9 @@ mutable struct JacobianQRWorkspace{T}
     nfactor::Int                  # number of QR factorizations of [J r], for tests
     nrescale::Int                 # number of rescalings of a held factorization (SP-D9), for tests
     nnorms::Int                   # number of column-norm computations, for tests
-    held::Bool                    # the last QR solve succeeded, and its factors are this fill's (qrfactors.jl, SP-D12)
-    helddamped::Bool              # that solve was damped (its Q has two stages)
 end
 JacobianQRWorkspace(scratch::JacobianQRScratch{T}, n::Integer) where T =
-    JacobianQRWorkspace{T}(scratch, Threads.atomic_add!(JACOBIAN_TOKENS, 1) + 1, Vector{Float64}(undef, n), ones(n), true, true, true, false, 0, 0, 0, false, false)
+    JacobianQRWorkspace{T}(scratch, Threads.atomic_add!(JACOBIAN_TOKENS, 1) + 1, Vector{Float64}(undef, n), ones(n), true, true, true, false, 0, 0, 0)
 JacobianQRWorkspace(m::Integer, n::Integer) = JacobianQRWorkspace(JacobianQRScratch(m, n), n)
 # Whether the scratch holds this system's current factorization
 factorized(ws::JacobianQRWorkspace) = !ws.stale && ws.scratch.owner == ws.token
@@ -173,7 +143,7 @@ JacobianStorage(J::Matrix{T}) where T = JacobianStorage(J, zeros(size(J, 1)), ze
 
 Base.size(A::JacobianStorage) = (size(A.J, 2), size(A.J, 2))
 Base.size(A::JacobianStorage, d::Integer) = size(A)[d]
-markstale!(A::JacobianStorage) = (A.ws.stale = true; A.ws.normsstale = true; A.ws.scalestale = true; A.ws.held = false; A)
+markstale!(A::JacobianStorage) = (A.ws.stale = true; A.ws.normsstale = true; A.ws.scalestale = true; A)
 # The storage the linearization writes, J and r, and the gradient Jᵀr it then forms
 getJ(A::JacobianStorage) = A.J
 getr(A::JacobianStorage) = A.r
@@ -271,15 +241,14 @@ It meets the [`AbstractLinearSystem`](@ref) interface with `getA(ls)` a [`Jacobi
 holding `J` and `r`, and `getb(ls)` the gradient `Jᵀr`. `J`'s element type `T` (`Float64` or `Float32`;
 `Float64` with an integer `m`) is the system's: the factorizations and their scratch are in `T`, while `r`,
 `b` and `x` are `Float64`; with QR the residual column `Qᵀr` is carried in `Float64` too (for `Float32`, the
-`T` reflectors are applied to a `Float64` column), and for `T = Float32` each QR solve is followed by one step of
-mixed-precision refinement, its residuals formed in `Float64` (the contract's "Precision"). The factorization is of
-`J S`, `S` the conditioning scale, and `x = S y` is returned (the contract's "Conditioning").
+`T` reflectors are applied to a `Float64` column). The factorization is of `J S`, `S` the conditioning
+scale, and `x = S y` is returned (the contract's "Conditioning").
 
 `solve!(ls, :auto)` (or `:qr`) factors `[J r]` by Householder QR once per linearization
 (`O(mn²)`), and then, for each damping value, factors the `2n × n` stacked matrix
 `[R; √λ D^½]` (`O(n³)`, independent of `m`), so retries with a larger `λ` are cheap.
 Memory: `J`, one `m × (n+1)` scratch copy of `[J r]` for the factorization (for `Float32`, `m × n` in
-`Float32` and `m + 2n` values in `Float64`, and `2(m + n) + n` more for the refinement), and `O(n²)` more.
+`Float32` and `m` values in `Float64`), and `O(n²)` more.
 `copy_structure` (the spare system an optimizer keeps for trial points) adds its own `J` and
 shares the scratch: about three times the storage of `J` in all. An undamped
 solve on a numerically rank-deficient `J` (smallest `|R[i,i]|` at or below
@@ -479,16 +448,11 @@ function backsubstitute!(x::AbstractVector, R::Matrix, n::Integer)
     return x
 end
 
-solve!(ls::DenseJacobianLinearSystem, s::Union{StaticSymbol{:auto}, StaticSymbol{:qr}}) = solve_qr!(ls, s, QR_REFINEMENT_STEPS)
-
-# The QR solve, followed for T narrower than Float64 by `steps` steps of mixed-precision refinement (qr_refinement.jl;
-# `steps` other than QR_REFINEMENT_STEPS for tests). For T = Float64 the branch is removed at compile time.
-function solve_qr!(ls::DenseJacobianLinearSystem{W, T}, s::Union{StaticSymbol{:auto}, StaticSymbol{:qr}}, steps::Integer) where {W, T}
+function solve!(ls::DenseJacobianLinearSystem{W, T}, s::Union{StaticSymbol{:auto}, StaticSymbol{:qr}}) where {W, T}
     A = ls.A
     ws = A.ws
     m, n = size(A.J)
     size(ws.scratch.Jr, 1) == m || solvermismatch(ls, dynamic(s))
-    ws.held = false
     # The damping has moved far from the stored scale's: a new scale, applied to the held factorization (conditioning.jl)
     if ls.condition && !ws.scalestale && !ws.nonfinite
         d = colnorms2!(A)
@@ -514,9 +478,7 @@ function solve_qr!(ls::DenseJacobianLinearSystem{W, T}, s::Union{StaticSymbol{:a
             ls.x[i] = q[i]
         end
         backsubstitute!(ls.x, Jr, n)
-        T === Float64 || refine_qr!(sc.refine::QRRefinement, ls.x, A.J, A.r, ws.cs, 0.0, nothing, Jr, sc.tau, sc.S, sc.tau2, sc.qv, sc.qv2, steps)
         unscale!(ls.x, ws.cs, ls.condition)
-        ws.held, ws.helddamped = true, false
         return Success
     end
     # Damped: QR of [R q; √λ D^½ 0], then back-substitution
@@ -549,9 +511,7 @@ function solve_qr!(ls::DenseJacobianLinearSystem{W, T}, s::Union{StaticSymbol{:a
         ls.x[i] = q[i]
     end
     backsubstitute!(ls.x, S, n)
-    T === Float64 || refine_qr!(sc.refine::QRRefinement, ls.x, A.J, A.r, ws.cs, lambda, scaling, Jr, sc.tau, S, sc.tau2, sc.qv, sc.qv2, steps)
     unscale!(ls.x, ws.cs, ls.condition)
-    ws.held, ws.helddamped = true, true
     return Success
 end
 
