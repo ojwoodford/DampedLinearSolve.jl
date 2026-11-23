@@ -163,6 +163,10 @@ sp_fill!(ls, J32, r) = (getJ(getA(ls)) .= J32; getr(getA(ls)) .= r; gradient!(ge
             @test eltype(getJ(A)) === Float32 && eltype(getr(A)) === Float64 && eltype(getb(ls)) === Float64 && eltype(getx(ls)) === Float64
             if s in (:auto, :qr)
                 @test eltype(A.ws.scratch.Jr) === Float32 && eltype(A.ws.scratch.S) === Float32 && eltype(A.ws.scratch.work) === Float32
+                # SP-D10: no Float32 copy of r: the factored matrices are J S and [R; √λ D^½ S] alone, and the residual
+                # column is carried in Float64
+                @test size(A.ws.scratch.Jr) == (m, n) && size(A.ws.scratch.S) == (2n, n)
+                @test eltype(A.ws.scratch.qv) === Float64 && length(A.ws.scratch.qv) == m && length(A.ws.scratch.qv2) == 2n
             else
                 @test ls.solver_ws.hs isa DLS.DenseLinearSystem{Float32}
             end
@@ -176,6 +180,18 @@ sp_fill!(ls, J32, r) = (getJ(getA(ls)) .= J32; getr(getA(ls)) .= r; gradient!(ge
             t = copy_structure(ls)
             @test t isa typeof(ls) && getJ(getA(t)) == getJ(A) && getJ(getA(t)) !== getJ(A)
         end
+        # SP-D10: the step is the least-squares solution for r as computed, not as rounded to Float32: r and the same r
+        # rounded to Float32 give different steps (before SP-D10 r was narrowed, and they were identical)
+        for s in (:auto, :qr), λ in (0.0, 0.37)
+            l1, l2 = makejacobiansystem(copy(J32), n, s), makejacobiansystem(copy(J32), n, s)
+            sp_fill!(l1, J32, r); sp_fill!(l2, J32, Float64.(Float32.(r)))
+            dampen!(l1, λ); dampen!(l2, λ)
+            @test solve!(l1, s) == Success && solve!(l2, s) == Success
+            @test r != Float64.(Float32.(r)) && getx(l1) != getx(l2)
+        end
+        # In Float64 the residual column is the factored matrix's last column, as before SP-D10: the same operations
+        ls = makejacobiansystem(copy(J64), n, :qr)
+        @test size(getA(ls).ws.scratch.Jr) == (m, n + 1) && isempty(getA(ls).ws.scratch.qv)
         # Fewer residuals than variables, undamped: not solved as definite, in Float32 too
         ls = makejacobiansystem(zeros(Float32, 3, n), n, :qr)
         sp_fill!(ls, Float32.(sp_jacobian(3, n)), sp_residual(3))
@@ -196,11 +212,19 @@ sp_fill!(ls, J32, r) = (getJ(getA(ls)) .= J32; getr(getA(ls)) .= r; gradient!(ge
             ls = makejacobiansystem(zeros(Float32, ms, ns), static(ns), s)
             @test ls isa DLS.StaticJacobianLinearSystem{ms, ns, ms * ns, ns, ns * ns, Float32}
             @test eltype(getJ(getA(ls))) === Float32 && eltype(ls.R) === Float32 && eltype(getx(ls)) === Float64
+            @test eltype(ls.q) === Float64   # SP-D10: Qᵀr in Float64
             sp_fill!(ls, Js, rs)
             sp_check_jacobian_solves(ls, static(s), sp_jacobian(ms, ns), rs)
             @test sp_allocs(ls, static(s)) == 0
             t = copy_structure(ls)
             @test t isa typeof(ls)
+            # the step is the solution for r as computed (SP-D10)
+            l2 = makejacobiansystem(zeros(Float32, ms, ns), static(ns), s)
+            sp_fill!(l2, Js, Float64.(Float32.(rs)))
+            for λ in (0.0, 0.37)
+                dampen!(ls, λ); dampen!(l2, λ); solve!(ls, s); solve!(l2, s)
+                @test getx(ls) != getx(l2)
+            end
         end
     end
 

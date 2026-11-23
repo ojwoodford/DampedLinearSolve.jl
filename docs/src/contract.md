@@ -128,8 +128,10 @@ an `ArgumentError` when the system is built.
 | `b` (the gradient), `x` (the solution), `r` (a Jacobian system's residual) | `Float64` |
 | `λ`, a Marquardt scaling `s`, and every value a query returns | `Float64` |
 
-A solve narrows what it needs of `b` (and `r`) into the factorization's scratch in `T`, solves there, and
-widens the result into `x`. Whoever fills `A` or `J` writes `T` values.
+A solve narrows what it needs of `b` into the factorization's scratch in `T`, solves there, and widens the
+result into `x`. The QR of a dense or static Jacobian system keeps the residual in `Float64`: it applies the
+`T` reflectors to a `Float64` column, so its step is the least-squares solution for `r` as computed, not as
+rounded to `T`. Whoever fills `A` or `J` writes `T` values.
 
 Whether a solver offers `Float32` is a fact about its library on that Julia version. A solver that does not
 offer the prototype's element type is an `ArgumentError` when the system is built, naming the solvers that

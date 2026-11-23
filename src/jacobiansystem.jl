@@ -43,21 +43,53 @@ geqrf_worksize(m::Integer, n::Integer) = geqrf_worksize(m, n, Float64)
 # and their LAPACK arrays. A system and its `copy_structure` copy share one: only one of them
 # has a live factorization at a time (the trial system is not solved until it becomes the main
 # one). `owner` is the token of the system whose factorization the scratch holds (0: none).
-# In `T`, the system's element type: `r` is narrowed into the last column of `Jr`.
-# Conditioned (conditioning.jl), `Jr` holds [J S r], with S the owner's conditioning scale.
+# The matrices are in `T`, the system's element type; the residual column is always Float64 (SP-D10). For
+# T = Float64 it is the last column of `Jr` and of `S`, transformed by LAPACK with the rest; for T = Float32 the
+# matrices hold J S and [R; √λ D^½ S] alone, and the residual column is carried in Float64 vectors (`qv`, `qv2`), to
+# which the T reflectors are applied in Float64 (`apply_reflectors!`): the step is the least-squares solution for
+# the residual as computed, not as rounded to single precision.
+# Conditioned (conditioning.jl), `Jr` holds J S, with S the owner's conditioning scale.
 mutable struct JacobianQRScratch{T}
-    const Jr::Matrix{T}     # m × (n+1): [J S r], factored in place; R and q = (Qᵀr)[1:k] on top
+    const Jr::Matrix{T}     # m × (n+1) [J S r] (Float64), m × n J S (Float32): factored in place, R on top
     const tau::Vector{T}
-    const S::Matrix{T}      # 2n × (n+1): [R q; √λ D^½ S 0], factored in place per damping
+    const S::Matrix{T}      # 2n × (n+1) [R q; √λ D^½ S 0] (Float64), 2n × n [R; √λ D^½ S] (Float32): per damping
     const tau2::Vector{T}
     const work::Vector{T}
+    const qv::Vector{Float64}    # Float32: Qᵀr, m (its first k = min(m, n) entries are q); Float64: empty
+    const qv2::Vector{Float64}   # Float32: the damped solve's right-hand side [q; 0] and its transform, 2n; Float64: empty
     owner::Int
 end
+# Whether the residual column is a column of the factored matrices (T = Float64) or a Float64 vector of its own
+residual_in_table(::Type{Float64}) = true
+residual_in_table(::Type) = false
 function JacobianQRScratch{T}(m::Integer, n::Integer) where T
-    lwork = max(geqrf_worksize(m, n + 1, T), geqrf_worksize(2n, n + 1, T))
-    return JacobianQRScratch{T}(Matrix{T}(undef, m, n + 1), Vector{T}(undef, min(m, n + 1)),
-                         Matrix{T}(undef, 2n, n + 1), Vector{T}(undef, min(2n, n + 1)),
-                         Vector{T}(undef, lwork), 0)
+    c = n + residual_in_table(T)
+    lwork = max(geqrf_worksize(m, c, T), geqrf_worksize(2n, c, T))
+    nq, nq2 = residual_in_table(T) ? (0, 0) : (m, 2n)
+    return JacobianQRScratch{T}(Matrix{T}(undef, m, c), Vector{T}(undef, min(m, c)),
+                         Matrix{T}(undef, 2n, c), Vector{T}(undef, min(2n, c)),
+                         Vector{T}(undef, lwork), Vector{Float64}(undef, nq), Vector{Float64}(undef, nq2), 0)
+end
+
+# q = Qᵀq for the Householder reflectors of a LAPACK QR (`geqrf`) of `F` (their vectors below the diagonal of the
+# first `k` columns, their factors `tau`): H_k ⋯ H_1 q, each H_j = I − τ_j v_j v_jᵀ with v_j = [0; 1; F[j+1:end, j]],
+# applied in Float64 to a Float64 q from the T entries
+function apply_reflectors!(q::AbstractVector{Float64}, F::Matrix, tau::Vector, k::Integer)
+    p = size(F, 1)
+    @inbounds for j in 1:k
+        t = Float64(tau[j])
+        iszero(t) && continue
+        w = q[j]
+        for i in j+1:p
+            w += Float64(F[i, j]) * q[i]
+        end
+        w *= t
+        q[j] -= w
+        for i in j+1:p
+            q[i] -= w * Float64(F[i, j])
+        end
+    end
+    return q
 end
 JacobianQRScratch(m::Integer, n::Integer) = JacobianQRScratch{Float64}(m, n)
 
@@ -207,14 +239,16 @@ with `J` dense (`m × n`, writing into the given matrix, or its own) and, with Q
 LSMR, `JᵀJ` never formed.
 It meets the [`AbstractLinearSystem`](@ref) interface with `getA(ls)` a [`JacobianStorage`](@ref)
 holding `J` and `r`, and `getb(ls)` the gradient `Jᵀr`. `J`'s element type `T` (`Float64` or `Float32`;
-`Float64` with an integer `m`) is the system's: the factorizations and their scratch are in `T`, `r` narrowed
-into them, while `r`, `b` and `x` are `Float64`. The factorization is of `[J S r]`, `S` the conditioning
+`Float64` with an integer `m`) is the system's: the factorizations and their scratch are in `T`, while `r`,
+`b` and `x` are `Float64`; with QR the residual column `Qᵀr` is carried in `Float64` too (for `Float32`, the
+`T` reflectors are applied to a `Float64` column). The factorization is of `J S`, `S` the conditioning
 scale, and `x = S y` is returned (the contract's "Conditioning").
 
 `solve!(ls, :auto)` (or `:qr`) factors `[J r]` by Householder QR once per linearization
 (`O(mn²)`), and then, for each damping value, factors the `2n × n` stacked matrix
 `[R; √λ D^½]` (`O(n³)`, independent of `m`), so retries with a larger `λ` are cheap.
-Memory: `J`, one `m × (n+1)` scratch copy of `[J r]` for the factorization, and `O(n²)` more.
+Memory: `J`, one `m × (n+1)` scratch copy of `[J r]` for the factorization (for `Float32`, `m × n` in
+`Float32` and `m` values in `Float64`), and `O(n²)` more.
 `copy_structure` (the spare system an optimizer keeps for trial points) adds its own `J` and
 shares the scratch: about three times the storage of `J` in all. An undamped
 solve on a numerically rank-deficient `J` (smallest `|R[i,i]|` at or below
@@ -341,8 +375,8 @@ function copy_structure(ls::DenseJacobianLinearSystem)
 end
 sharex(ls::DenseJacobianLinearSystem, from) = ls.x === from.x ? ls : DenseJacobianLinearSystem(ls.A, ls.b, from.x, ls.solver_ws, ls.condition, ls.lambda, ls.scaling)
 
-# QR of [J r]; afterwards Jr[1:k, 1:n] holds R (upper trapezoidal) and Jr[1:k, n+1] holds
-# q = (Qᵀr)[1:k], with k = min(m, n)
+# QR of [J r]; afterwards Jr[1:k, 1:n] holds R (upper trapezoidal) and q = (Qᵀr)[1:k], with k = min(m, n), is
+# Jr[1:k, n+1] (T = Float64) or qv[1:k] (otherwise)
 # Conditioned, the columns of J are scaled by s as they are copied (each entry formed in Float64 and narrowed), s
 # computed, at the first factorization of a fill, from the squared column norms and the damping `lambda`, `scaling`
 # of that solve (decision 13)
@@ -374,8 +408,13 @@ function factor_jacobian!(A::JacobianStorage{T}, condition::Bool, lambda::Float6
     else
         copyto!(view(Jr, :, 1:n), J)
     end
-    copyto!(view(Jr, :, n + 1), r)   # narrowed to the scratch's element type
-    geqrf_ws!(Jr, sc.tau, sc.work)
+    if residual_in_table(T)
+        copyto!(view(Jr, :, n + 1), r)
+        geqrf_ws!(Jr, sc.tau, sc.work)
+    else
+        geqrf_ws!(Jr, sc.tau, sc.work)
+        apply_reflectors!(copyto!(sc.qv, r), Jr, sc.tau, min(m, n))
+    end
     ws.nfactor += 1
     return nothing
 end
@@ -409,7 +448,7 @@ function backsubstitute!(x::AbstractVector, R::Matrix, n::Integer)
     return x
 end
 
-function solve!(ls::DenseJacobianLinearSystem, s::Union{StaticSymbol{:auto}, StaticSymbol{:qr}})
+function solve!(ls::DenseJacobianLinearSystem{W, T}, s::Union{StaticSymbol{:auto}, StaticSymbol{:qr}}) where {W, T}
     A = ls.A
     ws = A.ws
     m, n = size(A.J)
@@ -434,8 +473,9 @@ function solve!(ls::DenseJacobianLinearSystem, s::Union{StaticSymbol{:auto}, Sta
     if !(lambda > 0)
         # Undamped: R x = q, if R is square and numerically of full rank
         (m >= n && fullrank_upper(Jr, n)) || return NotPositiveDefinite
+        q = residual_in_table(T) ? view(Jr, :, n + 1) : sc.qv
         @inbounds for i in 1:n
-            ls.x[i] = Jr[i, n + 1]
+            ls.x[i] = q[i]
         end
         backsubstitute!(ls.x, Jr, n)
         unscale!(ls.x, ws.cs, ls.condition)
@@ -444,11 +484,12 @@ function solve!(ls::DenseJacobianLinearSystem, s::Union{StaticSymbol{:auto}, Sta
     # Damped: QR of [R q; √λ D^½ 0], then back-substitution
     S = sc.S
     scaling = ls.scaling
+    c = size(S, 2)   # n + 1 with the residual column in the table, n otherwise
     @inbounds begin
-        for j in 1:n+1, i in 1:2n
+        for j in 1:c, i in 1:2n
             S[i, j] = 0.0
         end
-        for j in 1:n+1, i in 1:min(j, k)
+        for j in 1:c, i in 1:min(j, k)
             S[i, j] = Jr[i, j]
         end
         for i in 1:n
@@ -457,8 +498,17 @@ function solve!(ls::DenseJacobianLinearSystem, s::Union{StaticSymbol{:auto}, Sta
     end
     geqrf_ws!(S, sc.tau2, sc.work)
     fullrank_upper(S, n) || return NotPositiveDefinite
+    if residual_in_table(T)
+        q = view(S, :, n + 1)
+    else
+        q = sc.qv2
+        @inbounds for i in 1:2n
+            q[i] = i <= k ? sc.qv[i] : 0.0
+        end
+        apply_reflectors!(q, S, sc.tau2, n)
+    end
     @inbounds for i in 1:n
-        ls.x[i] = S[i, n + 1]
+        ls.x[i] = q[i]
     end
     backsubstitute!(ls.x, S, n)
     unscale!(ls.x, ws.cs, ls.condition)
