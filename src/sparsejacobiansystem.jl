@@ -271,10 +271,15 @@ function solve!(ls::SparseJacobianLinearSystem, ::Union{StaticSymbol{:auto}, Sta
     isnothing(sp) && solvermismatch(ls, :qr)
     A.ws.nfactor += 1
     if ls.condition
-        # SPQR is Float64 only, so a damping row with the stored scale cannot overflow (at most √λ·2^40)
+        # The scale of the fill, recomputed when the damping has moved far from it (conditioning.jl); SPQR factorizes at
+        # every solve, so a new scale needs nothing else
         cs = A.ws.cs
+        d = colnorms2!(A)
+        if !A.ws.scalestale && scale_drifted(j -> d[j], cs, ls.lambda, ls.scaling, Float64)
+            Threads.atomic_add!(RESCALES, 1)
+            A.ws.scalestale = true
+        end
         if A.ws.scalestale
-            d = colnorms2!(A)
             lambda = max(ls.lambda, 0.0)
             @inbounds for j in eachindex(cs)
                 cs[j] = conditioning_scale(d[j] + damping_entry(lambda, ls.scaling, j), Float64)

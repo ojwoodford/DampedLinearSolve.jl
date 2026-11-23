@@ -9,6 +9,8 @@ cd_jacobian(m, n) = [sin(0.9 * i + 1.1 * j + 0.2 * i * j) + (i == j ? 2.0 : 0.0)
 cd_relerr(x, y) = norm(x - y) / norm(y)
 cd_relcomp(x, y) = maximum(abs.(x .- y) ./ abs.(y))
 cd_allocs(ls, s) = (solve!(ls, s); @allocated solve!(ls, s))
+cd_swing!(ls, s, λa, λb) = (dampen!(ls, λa); solve!(ls, s); dampen!(ls, λb); solve!(ls, s))
+cd_swingallocs(ls, s, λa, λb) = (cd_swing!(ls, s, λa, λb); @allocated cd_swing!(ls, s, λa, λb))
 cd_fillj!(ls, J, r) = (getJ(getA(ls)) .= J; getr(getA(ls)) .= r; gradient!(getb(ls), getA(ls)); markstale!(getA(ls)); ls)
 
 const CD_N, CD_M = 8, 14
@@ -174,8 +176,9 @@ const CD_DAMPINGS = ((0.0, nothing), (0.37, nothing), (2.9, [1.0 + i / CD_N for 
 
     # Decision 13: the scale is computed at the first solve after a fill, from the damped diagonal, and reused for later
     # dampings. A zero diagonal entry and one of 1e-30, solved undamped first (scales 2^40), then at λ = 1e16: the
-    # stored scale would put λ·s² = 1.2e40 beyond floatmax(Float32), so the scale is recomputed at that damping (the
-    # writer's proposal, conditioning.jl); then a first solve at λ₀ > 0 followed by 1e20·λ₀. Finite status and x.
+    # stored scale would put λ·s² = 1.2e40 beyond floatmax(Float32); the scaled damped diagonal is far outside
+    # [2^-16, 2^16], so the scale is recomputed at that damping (SP-D9, conditioning.jl), in either type; then a first
+    # solve at λ₀ > 0 followed by 1e20·λ₀. Finite status and x.
     @testset "a zero and a tiny diagonal entry, then a large damping, $T" for T in (Float64, Float32)
         Az = copy(A64)
         Az[1, :] .= 0; Az[:, 1] .= 0; Az[2, :] .= 0; Az[:, 2] .= 0
@@ -188,8 +191,7 @@ const CD_DAMPINGS = ((0.0, nothing), (0.37, nothing), (2.9, [1.0 + i / CD_N for 
             dampen!(ls, 0.0); solve!(ls, s)
             dampen!(ls, 1e16)
             @test solve!(ls, s) in (Success, Indefinite) && all(isfinite, getx(ls))
-            T === Float32 && @test DLS.RESCALES[] > n0   # reached in Float32 only
-            T === Float64 && @test DLS.RESCALES[] == n0
+            @test DLS.RESCALES[] > n0
             # after the rescale the system keeps the new scale: an earlier damping of the same fill still solves
             dampen!(ls, 1e16); x1 = copy(getx(ls)); solve!(ls, s)
             @test getx(ls) == x1
@@ -205,28 +207,77 @@ const CD_DAMPINGS = ((0.0, nothing), (0.37, nothing), (2.9, [1.0 + i / CD_N for 
         end
         for (make, s) in cd_jacobian_cases(T)
             ls = makejacobiansystem(make(Jz), CD_N, s)
-            # Not met for the Float32 QR (single-precision.md, Status of the continuation): no entry overflows, so the
-            # scale is not recomputed, but with the stored scale the damping rows of the two weak columns are about 1e12
-            # times the others', and the rank test (relative to eps(Float32) times the largest |R_ii|) reads the damped
-            # system as rank deficient: NotPositiveDefinite, observed, where λ = 1e16 and λ = 1 (after λ₀ = 1e-20) are
-            # 1e16 and 1e20 times the damping the scale was computed at. Float64's rank test passes.
-            qr32 = T === Float32 && s in (:auto, :qr)
+            # With the stored scale the damping rows of the two weak columns would be about 1e12 times the others', and
+            # the Float32 QR's rank test (relative to eps(Float32) times the largest |R_ii|) would read the damped system
+            # as rank deficient (NotPositiveDefinite, before SP-D9); the recomputed scale equilibrates them
             cd_fillj!(ls, Jz, r)
             dampen!(ls, 0.0); solve!(ls, s)
             dampen!(ls, 1e16)
-            st = solve!(ls, s)
-            qr32 ? (@test_broken st == Success) : (@test st == Success)
+            @test solve!(ls, s) == Success
             @test all(isfinite, getx(ls))
             for λ0 in (1e-6, 1e-20)
                 cd_fillj!(ls, Jz, r)
                 dampen!(ls, λ0)
                 @test solve!(ls, s) == Success && all(isfinite, getx(ls))
                 dampen!(ls, 1e20 * λ0)
-                st = solve!(ls, s)
-                qr32 && λ0 == 1e-20 ? (@test_broken st == Success) : (@test st == Success)
+                @test solve!(ls, s) == Success
                 @test all(isfinite, getx(ls))
             end
             getJ(getA(ls)) isa Matrix && @test cd_allocs(ls, static(s)) == 0
+        end
+    end
+
+    # SP-D9: the scale is recomputed when, for some variable, the scaled damped diagonal |d_j + λ·D_jj|·s_j² has left
+    # [2^-16, 2^16]; dampings that move by factors of 100 within a range the band allows never recompute. A
+    # recomputation applies the new scale (to the held factorization, for the dense Jacobian QR, by rescaling R's
+    # columns), and where conditioning is exact (Cholesky, LDLᵀ, unpivoted QR) the solution at a damping does not
+    # depend on which scale it was solved with.
+    @testset "SP-D9: the scale is recomputed when the damping has moved far, $T" for T in (Float64, Float32)
+        sweep = [10.0^k for k in (-8:2:2)]
+        sweep = vcat(sweep, reverse(sweep)[2:end])   # up and down, each step a factor of 100
+        far(ls) = 1e8 * max_diag(ls)
+        nearly(ls) = 3 * max_diag(ls)   # within the band of the undamped scale; its own scale differs from it
+        # exact where the factorization neither pivots nor tests a magnitude against another (LDLᵀ is LDLFactorizations'
+        # unpivoted factorization)
+        exact(ls, s) = s in (:auto, :cholesky, :ldl) || (s === :qr && getA(ls) isa Union{DLS.JacobianStorage, DLS.SparseJacobianStorage})
+        # where the scale is kept: the system, the QR workspace, or the normal equations' Hessian system
+        scaleof(ls, isjac) = !isjac ? ls.cs : ls.solver_ws isa DLS.JacobianNormalWorkspace ? ls.solver_ws.hs.cs : getA(ls).ws.cs
+        cases = vcat([(make(A64), s, false) for (make, s) in cd_hessian_cases(T)],
+                     [(make(J64), s, true) for (make, s) in cd_jacobian_cases(T)])
+        for (P, s, isjac) in cases
+            ls = isjac ? makejacobiansystem(P, CD_N, s) : makehessiansystem(P, s)
+            isjac ? cd_fillj!(ls, J64, r) : (getb(ls) .= b)
+            dampen!(ls, 0.0); @test solve!(ls, s) == Success
+            n0 = DLS.RESCALES[]
+            for λ in sweep
+                dampen!(ls, λ * max_diag(ls)); @test solve!(ls, s) == Success
+            end
+            @test DLS.RESCALES[] == n0   # never recomputed
+            dampen!(ls, nearly(ls)); solve!(ls, s); x1 = copy(getx(ls))
+            cs0 = copy(scaleof(ls, isjac))
+            dampen!(ls, far(ls)); @test solve!(ls, s) == Success
+            @test DLS.RESCALES[] == n0 + 1
+            dampen!(ls, far(ls)); solve!(ls, s)
+            @test DLS.RESCALES[] == n0 + 1   # the new scale is kept
+            dampen!(ls, nearly(ls)); @test solve!(ls, s) == Success
+            @test DLS.RESCALES[] == n0 + 2
+            cs1 = scaleof(ls, isjac)
+            @test cs1 != cs0 && cs1 == DLS.conditioning_scale.((isjac ? vec(sum(abs2, Float64.(P); dims = 1)) : diag(Float64.(P))) .+ nearly(ls), T)
+            # The same damping, solved with another scale: identical where conditioning is exact, to rounding otherwise
+            if exact(ls, s)
+                @test getx(ls) == x1
+            else
+                @test cd_relerr(getx(ls), x1) <= 64 * CD_N * eps(T) * (isjac ? cond(J64)^2 : cond(A64))
+            end
+            if isjac && P isa Matrix && s in (:auto, :qr)
+                # the held factorization was rescaled, not refactorized
+                @test getA(ls).ws.nfactor == 1 && getA(ls).ws.nrescale == 2
+            end
+            # Nothing allocates, recomputing included
+            if !(s === :qr && !isjac) && !(s === :cholesky && !(P isa Matrix)) && !(P isa SparseMatrixCSC && isjac)
+                λa, λb, ss = far(ls), nearly(ls), static(s)
+                @test cd_swingallocs(ls, ss, λa, λb) == 0
+            end
         end
     end
 

@@ -169,11 +169,14 @@ apart from rounding, and its damping, trust region and tests are all in the orig
 `s_j` is the power of two nearest, on a log scale, to `1/(1e-12 + √|d_j + λ₀·D_jj|)`, with `d_j` the
 diagonal of `A` as filled (for a Jacobian system, the squared column norms of `J`) and `λ₀·D` the damping of
 the first solve after a fill; `s_j = 1` where that is not finite. It is computed once per fill, at that
-first solve, and reused for every later damping of the same fill (a Jacobian system factorizes `J S` once per
+first solve, and reused for later dampings of the same fill (a Jacobian system factorizes `J S` once per
 fill, as without conditioning); [`zero!`](@ref) and [`markstale!`](@ref) invalidate it. Each scaled entry is
-formed in `Float64` and narrowed once. Should a later, much larger damping put a scaled entry beyond the
-largest finite `T`, the scale is recomputed at that damping, for that solve and the ones after it. The
-`1e-12` is a starting value.
+formed in `Float64` and narrowed once. When a later damping has moved far from the one the scale was computed
+at (for some variable the scaled damped diagonal `|d_j + λ·D_jj|·s_j²` lies outside `[2^-16, 2^16]`), the scale
+is recomputed at that damping, for that solve and the ones after it: going from undamped to heavily damped on a
+weak variable is the case it is for, and an optimizer raising or lowering `λ` by a few factors of ten does not
+reach it. The dense Jacobian system then rescales the columns of its held `R` (exact: the scales are powers of
+two) rather than factorizing `J` again. The `1e-12` and the `2^16` are starting values.
 Scaling by powers of two is exact, so with no overflow or underflow a factorization that does not pivot
 (Cholesky, LDLᵀ, Householder QR) gives the scaled result of the unconditioned one exactly: what
 conditioning changes is the range of the entries, which matters in `Float32`, and the decisions made by

@@ -40,10 +40,30 @@ end
 # The damping of variable j, λ·D_jj, in Float64
 @inline damping_entry(lambda::Float64, scaling, j) = isnothing(scaling) ? lambda : lambda * scaling[j]
 
-# A later damping of the same fill uses the stored scale, so a scaled entry λ·D_jj·s_j² can exceed floatmax(T) when λ
-# has grown far beyond λ₀ on a variable whose d_j + λ₀·D_jj is near zero. When a scaled entry would not be finite in
-# T (while it is finite in Float64), the scale is recomputed at the current damping, for that solve and those after
-# it (the writer's proposal, not decided: drop this function's callers' second pass to remove it). `RESCALES` counts
-# how often that happens, for tests and measurement.
+# A later damping of the same fill uses the stored scale (SP-D9). Before each such solve, if for some variable the
+# scaled damped diagonal |d_j + λ·D_jj|·s_j² lies outside [2^-16, 2^16], the scale is recomputed from the current
+# damping, for that solve and those after it: going from undamped to heavily damped on a weak variable is the case it
+# is for (with the stored scale its damping row or entry would be far larger than the others', which a relative rank,
+# pivot or indefiniteness test reads as a defect, and in Float32 can overflow); an optimizer raising or lowering λ by
+# a few factors of ten does not reach it. A variable outside the band whose scale computed now would be the same (a
+# zero diagonal entry, scaled by the bound 1/1e-12 either way) does not count, so that such a variable does not
+# recompute at every solve. `RESCALES` counts the recomputations, for tests and measurement.
+#
+# The bound 2^16 is a starting value (rules.md 26; improvements.md item 5).
+const RESCALE_BOUND = 2.0^16
 const RESCALES = Threads.Atomic{Int}(0)
-@inline overflows(v::Float64, ::Type{T}) where T = isfinite(v) && !isfinite(T(v))
+
+# Whether the stored scale `s` has drifted from the damping now (`lambda`, `scaling`), the diagonal as filled read by
+# `diag(j)` in Float64: one pass, allocating nothing
+@inline function scale_drifted(diag::F, s::AbstractVector{Float64}, lambda::Float64, scaling, ::Type{T}) where {F, T}
+    lambda = max(lambda, 0.0)
+    @inbounds for j in eachindex(s)
+        d = diag(j) + damping_entry(lambda, scaling, j)
+        sj = s[j]
+        v = abs(d) * (sj * sj)
+        if !(inv(RESCALE_BOUND) <= v <= RESCALE_BOUND) && conditioning_scale(d, T) != sj
+            return true
+        end
+    end
+    return false
+end
