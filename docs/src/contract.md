@@ -200,6 +200,21 @@ The static systems are not conditioned, and neither are the Krylov solves: for a
 diagonal scaling is a preconditioner, which changes the iterates by more than rounding. There is no
 public switch.
 
+## The factors of a QR solve
+
+This is **not part of the contract**: no system but the one below offers it, and [`check_linear_system`](@ref) does
+not check it. It is for a caller that refines a larger least-squares problem of which a system's is a part
+(BlockLinearSystems.jl's QR-eliminated systems).
+
+[`qrfactors`](@ref)`(ls)` gives the factors `(Q, R)` of the last QR solve of a dense Jacobian system built for
+`:auto` or `:qr` with `m ≥ n`: `M = Q·[R; 0]` for the matrix the system stands for, as filled, at the damping of
+that solve (`M = J` undamped, `[J; √(λD)]` damped). They are in the system's own variables: the solve factorizes
+`M S = Q R̂` (see [Conditioning](#Conditioning)), and `R = R̂ S⁻¹`, so neither the scale nor its recomputation
+shows. `Q` and `R` support only `lmul!(Q', v)`, `lmul!(Q, v)`, `ldiv!(R, v)` and `ldiv!(R', v)` on `Float64`
+vectors, in `Float64` arithmetic, and `size`. They are valid after a solve that returned `Success` until the next
+`zero!`, `markstale!`, or solve of the system or of one sharing its workspace (`copy_structure`, `sharex`); a
+later `dampen!` does not change them, and they change nothing a later solve reads. Nothing allocates.
+
 ## The spare system
 
 An optimizer that evaluates a trial point keeps a second system and swaps the two when the trial is

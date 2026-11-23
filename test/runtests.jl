@@ -13,6 +13,7 @@ using Test
     include("conformance.jl")
     include("jacobiansystem.jl")
     include("qr_refinement.jl")
+    include("qrfactors.jl")
     include("jacobiannormalsystem.jl")
     include("sparsejacobiansystem.jl")
     include("staticjacobiansystem.jl")

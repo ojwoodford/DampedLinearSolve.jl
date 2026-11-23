@@ -78,38 +78,43 @@ end
 
 # q = Qᵀq for the Householder reflectors of a LAPACK QR (`geqrf`) of `F` (their vectors below the diagonal of the
 # first `k` columns, their factors `tau`): H_k ⋯ H_1 q, each H_j = I − τ_j v_j v_jᵀ with v_j = [0; 1; F[j+1:end, j]],
-# applied in Float64 to a Float64 q from the T entries
-function apply_reflectors!(q::AbstractVector{Float64}, F::Matrix, tau::Vector, k::Integer)
+# applied in Float64 to a Float64 q from the T entries.
+# Row i of F is entry i of q for i ≤ `split`, and entry i + `off` after it (SP-D12: the damped solve's stacked
+# reflectors applied to rows 1:n and m+1:m+n of a vector of length m + n, with split = n and off = m − n). With the
+# defaults the map is the identity, and the operations and their order are those without it.
+function apply_reflectors!(q::AbstractVector{Float64}, F::Matrix, tau::Vector, k::Integer, split::Integer = size(F, 1), off::Integer = 0)
     p = size(F, 1)
     @inbounds for j in 1:k
-        t = Float64(tau[j])
-        iszero(t) && continue
-        w = q[j]
-        for i in j+1:p
-            w += Float64(F[i, j]) * q[i]
-        end
-        w *= t
-        q[j] -= w
-        for i in j+1:p
-            q[i] -= w * Float64(F[i, j])
-        end
+        reflect!(q, F, Float64(tau[j]), j, p, split, off)
     end
     return q
 end
 # q = Q q for the same reflectors: H_1 ⋯ H_k q, the reflectors applied in reverse order, in Float64
-function apply_reflectors_reverse!(q::AbstractVector{Float64}, F::Matrix, tau::Vector, k::Integer)
+function apply_reflectors_reverse!(q::AbstractVector{Float64}, F::Matrix, tau::Vector, k::Integer, split::Integer = size(F, 1), off::Integer = 0)
     p = size(F, 1)
     @inbounds for j in k:-1:1
-        t = Float64(tau[j])
-        iszero(t) && continue
+        reflect!(q, F, Float64(tau[j]), j, p, split, off)
+    end
+    return q
+end
+# q = H_j q, for the reflector of column j (rows j:p of F, through the row map; j ≤ split)
+@inline function reflect!(q::AbstractVector{Float64}, F::Matrix, t::Float64, j::Integer, p::Integer, split::Integer, off::Integer)
+    iszero(t) && return q
+    @inbounds begin
         w = q[j]
-        for i in j+1:p
+        for i in j+1:split
             w += Float64(F[i, j]) * q[i]
+        end
+        for i in split+1:p
+            w += Float64(F[i, j]) * q[i + off]
         end
         w *= t
         q[j] -= w
-        for i in j+1:p
+        for i in j+1:split
             q[i] -= w * Float64(F[i, j])
+        end
+        for i in split+1:p
+            q[i + off] -= w * Float64(F[i, j])
         end
     end
     return q
@@ -142,9 +147,11 @@ mutable struct JacobianQRWorkspace{T}
     nfactor::Int                  # number of QR factorizations of [J r], for tests
     nrescale::Int                 # number of rescalings of a held factorization (SP-D9), for tests
     nnorms::Int                   # number of column-norm computations, for tests
+    held::Bool                    # the last QR solve succeeded, and its factors are this fill's (qrfactors.jl, SP-D12)
+    helddamped::Bool              # that solve was damped (its Q has two stages)
 end
 JacobianQRWorkspace(scratch::JacobianQRScratch{T}, n::Integer) where T =
-    JacobianQRWorkspace{T}(scratch, Threads.atomic_add!(JACOBIAN_TOKENS, 1) + 1, Vector{Float64}(undef, n), ones(n), true, true, true, false, 0, 0, 0)
+    JacobianQRWorkspace{T}(scratch, Threads.atomic_add!(JACOBIAN_TOKENS, 1) + 1, Vector{Float64}(undef, n), ones(n), true, true, true, false, 0, 0, 0, false, false)
 JacobianQRWorkspace(m::Integer, n::Integer) = JacobianQRWorkspace(JacobianQRScratch(m, n), n)
 # Whether the scratch holds this system's current factorization
 factorized(ws::JacobianQRWorkspace) = !ws.stale && ws.scratch.owner == ws.token
@@ -166,7 +173,7 @@ JacobianStorage(J::Matrix{T}) where T = JacobianStorage(J, zeros(size(J, 1)), ze
 
 Base.size(A::JacobianStorage) = (size(A.J, 2), size(A.J, 2))
 Base.size(A::JacobianStorage, d::Integer) = size(A)[d]
-markstale!(A::JacobianStorage) = (A.ws.stale = true; A.ws.normsstale = true; A.ws.scalestale = true; A)
+markstale!(A::JacobianStorage) = (A.ws.stale = true; A.ws.normsstale = true; A.ws.scalestale = true; A.ws.held = false; A)
 # The storage the linearization writes, J and r, and the gradient Jᵀr it then forms
 getJ(A::JacobianStorage) = A.J
 getr(A::JacobianStorage) = A.r
@@ -481,6 +488,7 @@ function solve_qr!(ls::DenseJacobianLinearSystem{W, T}, s::Union{StaticSymbol{:a
     ws = A.ws
     m, n = size(A.J)
     size(ws.scratch.Jr, 1) == m || solvermismatch(ls, dynamic(s))
+    ws.held = false
     # The damping has moved far from the stored scale's: a new scale, applied to the held factorization (conditioning.jl)
     if ls.condition && !ws.scalestale && !ws.nonfinite
         d = colnorms2!(A)
@@ -508,6 +516,7 @@ function solve_qr!(ls::DenseJacobianLinearSystem{W, T}, s::Union{StaticSymbol{:a
         backsubstitute!(ls.x, Jr, n)
         T === Float64 || refine_qr!(sc.refine::QRRefinement, ls.x, A.J, A.r, ws.cs, 0.0, nothing, Jr, sc.tau, sc.S, sc.tau2, sc.qv, sc.qv2, steps)
         unscale!(ls.x, ws.cs, ls.condition)
+        ws.held, ws.helddamped = true, false
         return Success
     end
     # Damped: QR of [R q; √λ D^½ 0], then back-substitution
@@ -542,6 +551,7 @@ function solve_qr!(ls::DenseJacobianLinearSystem{W, T}, s::Union{StaticSymbol{:a
     backsubstitute!(ls.x, S, n)
     T === Float64 || refine_qr!(sc.refine::QRRefinement, ls.x, A.J, A.r, ws.cs, lambda, scaling, Jr, sc.tau, S, sc.tau2, sc.qv, sc.qv2, steps)
     unscale!(ls.x, ws.cs, ls.condition)
+    ws.held, ws.helddamped = true, true
     return Success
 end
 

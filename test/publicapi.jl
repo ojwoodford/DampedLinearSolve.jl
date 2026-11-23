@@ -35,6 +35,7 @@ const PUBLIC_API = sort([
     :makejacobiansystem,
     :markstale!,
     :max_diag,
+    :qrfactors,
     :quadform,
     :quadratic_model_change,
     :sharex,

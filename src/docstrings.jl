@@ -309,6 +309,40 @@ solve!(ls, :cholesky)   # Success; getx(ls) == [2.0, 2.0]
 solve!
 
 """
+    qrfactors(ls) -> (Q, R)
+
+The factors of the last QR solve of a dense Jacobian system `ls` (built from a `Matrix` or an integer
+prototype for `:auto` or `:qr`, with `m ≥ n`): `M = Q·[R; 0]`, where `M` is the matrix the system stands for, as
+filled, at the damping of that solve: `J` (`m × n`) undamped, `[J; √(λD)]` (`(m + n) × n`) damped. `Q` is
+orthogonal (`p × p`, `p` the rows of `M`) and `R` is upper triangular (`n × n`), both in the system's own
+variables (the conditioning inside the solve does not show). They support only, on `Float64` vectors in place,
+in `Float64` arithmetic with the factors (held in the system's element type) widened:
+
+- `lmul!(Q', v)` and `lmul!(Q, v)`, `v` of length `p`;
+- `ldiv!(R, v)` and `ldiv!(R', v)`, `v` of length `n`;
+- `size(Q)` and `size(R)`.
+
+So the solve's `x` is `ldiv!(R, (Q'·[r; 0])[1:n])` before any refinement. They are valid after a call of
+[`solve!`](@ref) that returned `Success`, until the next [`zero!`](@ref), [`markstale!`](@ref) or solve of `ls` or
+of a system sharing its workspace ([`copy_structure`](@ref), [`sharex`](@ref)); a later [`dampen!`](@ref) does
+not change them. With none held, `qrfactors` throws, naming the reason. Any other system, a dense Jacobian
+system built for another solver, or one with `m < n`, is an `ArgumentError`. Nothing allocates. This is not part
+of the linear-system contract: no other system offers it.
+
+# Example
+```julia
+using LinearAlgebra
+ls = makejacobiansystem([1.0 0.0; 0.0 2.0; 1.0 1.0], 2, :qr)
+getr(getA(ls)) .= [1.0, 2.0, 3.0]; gradient!(getb(ls), getA(ls)); markstale!(getA(ls))
+solve!(ls, :qr)                       # Success
+Q, R = qrfactors(ls)
+d = lmul!(Q', copy(getr(getA(ls))))   # Qᵀr
+ldiv!(R, d[1:2]) ≈ getx(ls)           # true
+```
+"""
+qrfactors
+
+"""
     max_diag(ls)
 
 The largest absolute diagonal entry of the undamped `A` (for a Jacobian system, the largest squared
