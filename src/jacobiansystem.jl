@@ -49,6 +49,9 @@ geqrf_worksize(m::Integer, n::Integer) = geqrf_worksize(m, n, Float64)
 # which the T reflectors are applied in Float64 (`apply_reflectors!`): the step is the least-squares solution for
 # the residual as computed, not as rounded to single precision.
 # Conditioned (conditioning.jl), `Jr` holds J S, with S the owner's conditioning scale.
+# `refine` is the storage of the mixed-precision refinement (SP-D11, qr_refinement.jl): a `QRRefinement` for an element
+# type narrower than Float64, `nothing` for Float64, which is not refined (the solve selects the refinement by
+# dispatch on T, so no refinement code runs for Float64).
 mutable struct JacobianQRScratch{T}
     const Jr::Matrix{T}     # m × (n+1) [J S r] (Float64), m × n J S (Float32): factored in place, R on top
     const tau::Vector{T}
@@ -57,6 +60,7 @@ mutable struct JacobianQRScratch{T}
     const work::Vector{T}
     const qv::Vector{Float64}    # Float32: Qᵀr, m (its first k = min(m, n) entries are q); Float64: empty
     const qv2::Vector{Float64}   # Float32: the damped solve's right-hand side [q; 0] and its transform, 2n; Float64: empty
+    const refine::Union{Nothing, QRRefinement}
     owner::Int
 end
 # Whether the residual column is a column of the factored matrices (T = Float64) or a Float64 vector of its own
@@ -66,9 +70,10 @@ function JacobianQRScratch{T}(m::Integer, n::Integer) where T
     c = n + residual_in_table(T)
     lwork = max(geqrf_worksize(m, c, T), geqrf_worksize(2n, c, T))
     nq, nq2 = residual_in_table(T) ? (0, 0) : (m, 2n)
+    refine = qr_refinement(T, m, n)
     return JacobianQRScratch{T}(Matrix{T}(undef, m, c), Vector{T}(undef, min(m, c)),
                          Matrix{T}(undef, 2n, c), Vector{T}(undef, min(2n, c)),
-                         Vector{T}(undef, lwork), Vector{Float64}(undef, nq), Vector{Float64}(undef, nq2), 0)
+                         Vector{T}(undef, lwork), Vector{Float64}(undef, nq), Vector{Float64}(undef, nq2), refine, 0)
 end
 
 # q = Qᵀq for the Householder reflectors of a LAPACK QR (`geqrf`) of `F` (their vectors below the diagonal of the
@@ -77,6 +82,24 @@ end
 function apply_reflectors!(q::AbstractVector{Float64}, F::Matrix, tau::Vector, k::Integer)
     p = size(F, 1)
     @inbounds for j in 1:k
+        t = Float64(tau[j])
+        iszero(t) && continue
+        w = q[j]
+        for i in j+1:p
+            w += Float64(F[i, j]) * q[i]
+        end
+        w *= t
+        q[j] -= w
+        for i in j+1:p
+            q[i] -= w * Float64(F[i, j])
+        end
+    end
+    return q
+end
+# q = Q q for the same reflectors: H_1 ⋯ H_k q, the reflectors applied in reverse order, in Float64
+function apply_reflectors_reverse!(q::AbstractVector{Float64}, F::Matrix, tau::Vector, k::Integer)
+    p = size(F, 1)
+    @inbounds for j in k:-1:1
         t = Float64(tau[j])
         iszero(t) && continue
         w = q[j]
@@ -241,14 +264,15 @@ It meets the [`AbstractLinearSystem`](@ref) interface with `getA(ls)` a [`Jacobi
 holding `J` and `r`, and `getb(ls)` the gradient `Jᵀr`. `J`'s element type `T` (`Float64` or `Float32`;
 `Float64` with an integer `m`) is the system's: the factorizations and their scratch are in `T`, while `r`,
 `b` and `x` are `Float64`; with QR the residual column `Qᵀr` is carried in `Float64` too (for `Float32`, the
-`T` reflectors are applied to a `Float64` column). The factorization is of `J S`, `S` the conditioning
-scale, and `x = S y` is returned (the contract's "Conditioning").
+`T` reflectors are applied to a `Float64` column), and for `T = Float32` each QR solve is followed by one step of
+mixed-precision refinement, its residuals formed in `Float64` (the contract's "Precision"). The factorization is of
+`J S`, `S` the conditioning scale, and `x = S y` is returned (the contract's "Conditioning").
 
 `solve!(ls, :auto)` (or `:qr`) factors `[J r]` by Householder QR once per linearization
 (`O(mn²)`), and then, for each damping value, factors the `2n × n` stacked matrix
 `[R; √λ D^½]` (`O(n³)`, independent of `m`), so retries with a larger `λ` are cheap.
 Memory: `J`, one `m × (n+1)` scratch copy of `[J r]` for the factorization (for `Float32`, `m × n` in
-`Float32` and `m` values in `Float64`), and `O(n²)` more.
+`Float32` and `m + 2n` values in `Float64`, and `2(m + n) + n` more for the refinement), and `O(n²)` more.
 `copy_structure` (the spare system an optimizer keeps for trial points) adds its own `J` and
 shares the scratch: about three times the storage of `J` in all. An undamped
 solve on a numerically rank-deficient `J` (smallest `|R[i,i]|` at or below
@@ -448,7 +472,11 @@ function backsubstitute!(x::AbstractVector, R::Matrix, n::Integer)
     return x
 end
 
-function solve!(ls::DenseJacobianLinearSystem{W, T}, s::Union{StaticSymbol{:auto}, StaticSymbol{:qr}}) where {W, T}
+solve!(ls::DenseJacobianLinearSystem, s::Union{StaticSymbol{:auto}, StaticSymbol{:qr}}) = solve_qr!(ls, s, QR_REFINEMENT_STEPS)
+
+# The QR solve, followed for T narrower than Float64 by `steps` steps of mixed-precision refinement (qr_refinement.jl;
+# `steps` other than QR_REFINEMENT_STEPS for tests). For T = Float64 the branch is removed at compile time.
+function solve_qr!(ls::DenseJacobianLinearSystem{W, T}, s::Union{StaticSymbol{:auto}, StaticSymbol{:qr}}, steps::Integer) where {W, T}
     A = ls.A
     ws = A.ws
     m, n = size(A.J)
@@ -478,6 +506,7 @@ function solve!(ls::DenseJacobianLinearSystem{W, T}, s::Union{StaticSymbol{:auto
             ls.x[i] = q[i]
         end
         backsubstitute!(ls.x, Jr, n)
+        T === Float64 || refine_qr!(sc.refine::QRRefinement, ls.x, A.J, A.r, ws.cs, 0.0, nothing, Jr, sc.tau, sc.S, sc.tau2, sc.qv, sc.qv2, steps)
         unscale!(ls.x, ws.cs, ls.condition)
         return Success
     end
@@ -511,6 +540,7 @@ function solve!(ls::DenseJacobianLinearSystem{W, T}, s::Union{StaticSymbol{:auto
         ls.x[i] = q[i]
     end
     backsubstitute!(ls.x, S, n)
+    T === Float64 || refine_qr!(sc.refine::QRRefinement, ls.x, A.J, A.r, ws.cs, lambda, scaling, Jr, sc.tau, S, sc.tau2, sc.qv, sc.qv2, steps)
     unscale!(ls.x, ws.cs, ls.condition)
     return Success
 end

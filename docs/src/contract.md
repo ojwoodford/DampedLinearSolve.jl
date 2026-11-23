@@ -133,6 +133,17 @@ result into `x`. The QR of a dense or static Jacobian system keeps the residual 
 `T` reflectors to a `Float64` column, so its step is the least-squares solution for `r` as computed, not as
 rounded to `T`. Whoever fills `A` or `J` writes `T` values.
 
+**Refinement.** In `Float32` the QR solve of a dense Jacobian system (`:auto`, `:qr`) is refined: one step of
+Björck's iterative refinement of the augmented system (the residual carried as an unknown), with the residuals
+formed in `Float64` from `J` as stored, `r`, the scale and the damping, and the correction solved with the `T`
+factors applied in `Float64`. Without it the `Float32` QR's error grows with the residual at the solution (about
+`eps(T)·κ²·‖r‖/(‖J‖‖x‖)`, from the factor's own rounding); one step brings the step's error down by about
+`eps(T)·κ`, two to that of the `Float64` QR on the package's test problems. The one step is a starting value. Not
+refined: `Float64` systems (no refinement code runs, and they hold no refinement storage), the static Jacobian
+system, the normal equations (`:cholesky`, `:ldl`, which solve from the `Float64` gradient), SPQR (`Float64` only)
+and LSMR. The refinement costs two products with `J`, three applications of `Q` or `Qᵀ` (the start's residual, then one each way) and two triangular solves
+per solve, in plain loops, and `2(m + n) + n` `Float64` values of storage.
+
 Whether a solver offers `Float32` is a fact about its library on that Julia version. A solver that does not
 offer the prototype's element type is an `ArgumentError` when the system is built, naming the solvers that
 do: there is no silent substitution, `:auto` included. Checked by building and solving on Julia 1.10
