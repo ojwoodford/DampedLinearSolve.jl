@@ -12,7 +12,7 @@ name is available, and [`checklinsolver`](@ref) throws, naming the package to lo
 | sparse (`SparseMatrixCSC`) | LDLᵀ (LDLFactorizations, analysed once) | CHOLMOD (analysed once) | LDLᵀ | sparse QR of `A` |
 | Jacobian, dense (`Matrix`, an integer `m`) | QR of `[J r]`, then of `[R; √λ D^½]` | Cholesky of `JᵀJ`, formed once per linearization (BLAS `syrk`) | Bunch–Kaufman of `JᵀJ` | as `:auto` |
 | Jacobian, static (a `StaticInt` `n`, `m·n ≤ 48`) | QR of `[J r]`, then of `[R; √λ D^½]` | | | as `:auto` |
-| Jacobian, sparse (`SparseMatrixCSC{Float64, Int}`) | SPQR of `[J; √λ D^½]` (analysed once) | | | as `:auto` |
+| Jacobian, sparse (`SparseMatrixCSC`) | SPQR of `[J; √λ D^½]` (analysed once) | | | as `:auto` |
 
 With Krylov.jl loaded, `:cg` and `:minres` solve dense and sparse systems (Jacobi preconditioned on a
 sparse `A` whenever the damped diagonal is positive; CG reports nonpositive curvature as

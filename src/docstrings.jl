@@ -16,7 +16,7 @@ each rule.
 | [`getJ`](@ref), [`getr`](@ref), [`gradient!`](@ref), [`markstale!`](@ref) | A Jacobian system's storage: `J` and `r`, `b = Jᵀr`, and "`J` or `r` was written". |
 | [`dampen!`](@ref) | Records `λI` or `λ·Diagonal(s)`, applied only inside `solve!`. |
 | [`solve!`](@ref) | Solves the damped system into `x`, leaving `A` and `b` as filled; returns a [`SolveStatus`](@ref). |
-| [`max_diag`](@ref), [`getdiag!`](@ref), [`quadform`](@ref), [`quadratic_model_change`](@ref), [`dampingfloor`](@ref), [`isfinitesystem`](@ref) | Queries on the undamped system. |
+| [`max_diag`](@ref), [`getdiag!`](@ref), [`quadform`](@ref), [`quadratic_model_change`](@ref), [`dampingfloor`](@ref), [`isfinitesystem`](@ref), [`systemeltype`](@ref) | Queries on the undamped system, and its element type. |
 | [`copy_structure`](@ref), [`sharex`](@ref) | A spare system of the same structure, and sharing `x` with another. |
 """
 AbstractLinearSystem
@@ -69,10 +69,16 @@ is a `Static.StaticInt`, dense when it is an `Int`.
 
 - `H::MMatrix`: a static system that writes into `H`; any other `StaticMatrix`: a static system of
   its own.
-- `H::Matrix{Float64}`: a dense system that writes into `H`; any other `AbstractMatrix`: a dense
-  system on a `Float64` copy.
-- `H::SparseMatrixCSC{Float64}`: a sparse system that writes into `H`, or into a copy with explicit
+- `H::Matrix`: a dense system that writes into `H`; any other `AbstractMatrix`: a dense system on a
+  copy of the same element type.
+- `H::SparseMatrixCSC`: a sparse system that writes into `H`, or into a copy with explicit
   zeros added if a diagonal entry is missing.
+
+The element type of `H`, `Float64` or `Float32`, is the system's ([`systemeltype`](@ref)): `A` and its
+factorization are held in it, while `b`, `x`, the damping and the queries are `Float64`. Any other element
+type is an `ArgumentError`, as is a `linsolver` that does not offer `Float32` for that kind of system
+(see the contract's "Precision"). Without a prototype the system is `Float64`. The dense and sparse
+systems are conditioned inside the solve (the contract's "Conditioning"); the static system is not.
 
 A package that implements the contract adds methods for its own prototypes. `linsolver` (a
 `Symbol` or a `StaticSymbol`) is used to preallocate the solver's workspace, and the system must be
@@ -93,15 +99,21 @@ A Jacobian linear system built from a Jacobian prototype `J`, for `n` variables:
 and the residual `r` ([`getJ`](@ref), [`getr`](@ref)), `b = Jᵀr`, and each solve the solution of
 `min ‖J x − r‖² + λ xᵀD x` from `J`, without forming `JᵀJ` unless `linsolver` is `:cholesky` or `:ldl`.
 
-- `J::Matrix{Float64}`: a dense system that writes into `J` (with the values it holds); static
+- `J::Matrix`: a dense system that writes into `J` (with the values it holds); static
   (`StaticArrays`) when `n` is a `Static.StaticInt`, `linsolver` is QR (`:auto` or `:qr`) and
   `m·n` is small.
 - `J::Integer`: the same, for `m = J` residuals, with its own `J` starting as zeros.
-- `J::SparseMatrixCSC{Float64, Int}`: a sparse system, solved by SuiteSparse's SPQR, its symbolic
+- `J::SparseMatrixCSC{T, Int}`: a sparse system, solved by SuiteSparse's SPQR, its symbolic
   analysis done here, once.
 
+The element type of a matrix `J`, `Float64` or `Float32`, is the system's ([`systemeltype`](@ref)): `J`,
+its reductions and factorizations are held in it, while `r`, `b`, `x` and the queries are `Float64`
+(an integer `m` gives a `Float64` system). Any other element type is an `ArgumentError`, as is a
+`linsolver` that does not offer `Float32` for the system: SPQR, for one (see the contract's
+"Precision"). The dense and sparse systems are conditioned inside the solve; the static one is not.
+
 `linsolver` is `:auto` or `:qr` (QR of `J`), or `:lsmr` with Krylov.jl loaded. For a dense `J` (a
-`Matrix{Float64}` or an integer `m`) it can also be `:cholesky` or `:ldl`: the normal equations,
+`Matrix` or an integer `m`) it can also be `:cholesky` or `:ldl`: the normal equations,
 `JᵀJ` formed once per linearization (BLAS `syrk`) and `JᵀJ + λD` factored per damping by Cholesky or
 Bunch–Kaufman; always the dense system, never the static one, whatever `n`. They square the condition
 number of `J`, so `:auto` is QR (see `DenseJacobianLinearSystem` for costs). Validate `J` first with
@@ -136,8 +148,9 @@ checkhessian
     checkjacobian(J) -> nothing
 
 Throws an `ArgumentError` if `J` is not a Jacobian prototype a Jacobian system can be built from: a
-`Matrix{Float64}` or `SparseMatrixCSC{Float64, Int}` with at least one row, or an integer number of
-residuals `m ≥ 1` (or a prototype a package that implements the contract adds).
+`Matrix` or `SparseMatrixCSC{T, Int}` with `T` = `Float64` or `Float32` and at least one row, or an integer
+number of residuals `m ≥ 1` (or a prototype a package that implements the contract adds). Whether the
+solver offers `Float32` is checked when the system is built.
 """
 checkjacobian
 
@@ -146,7 +159,7 @@ checkjacobian
 
 Throws an `ArgumentError` if the Jacobian system of the Jacobian prototype `J` does not take
 `linsolver`. The built-in prototypes take `:auto`, `:qr` and `:lsmr` (the last with Krylov.jl
-loaded, which [`checklinsolver`](@ref) checks); a dense one (a `Matrix{Float64}` or an integer `m`)
+loaded, which [`checklinsolver`](@ref) checks); a dense one (a `Matrix` or an integer `m`)
 also takes `:cholesky` and `:ldl` (the normal equations), and a `SparseMatrixCSC` one does not.
 """
 check_jacobian_linsolver
@@ -331,12 +344,25 @@ quadratic_model_change
 """
     dampingfloor(ls) -> Float64
 
-The smallest damping the system's solver resolves, relative to the diagonal: `eps(Float64)` for a
+The smallest damping the system's solver resolves, relative to the diagonal: `eps(T)` for a
 factorization of `A + λD`, including a dense Jacobian system built for `:cholesky` or `:ldl` (which
-factors `JᵀJ + λD`), and `eps(Float64)^2` for a Jacobian system solved by QR of `J` (or LSMR), which
-works with the condition number of `J`.
+factors `JᵀJ + λD`), and `eps(T)^2` for a Jacobian system solved by QR of `J` (or LSMR), which
+works with the condition number of `J`. `T` is the system's element type ([`systemeltype`](@ref)); the
+value is a `Float64` either way.
 """
 dampingfloor
+
+"""
+    systemeltype(ls) -> Type
+
+The element type of the linear system: the type its matrix (`A`, or `J` of a Jacobian system) and every
+copy, reduction and factorization of it are held in, `Float64` or `Float32`. It is the element type of the
+prototype the system was built from (`Float64` for a system built from a number of variables or residuals).
+`b`, `x`, `r`, the damping and every query's result are `Float64` whatever it is. An optimizer reads it to
+set the tolerances that depend on the precision of the matrix, such as its damping floor. A system of
+another package that does not implement it is taken to be `Float64`.
+"""
+systemeltype
 
 """
     isfinitesystem(ls) -> Bool

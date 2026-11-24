@@ -243,3 +243,55 @@ end
     err = try PExt.pardiso_unavailable_error(); nothing catch e; e end
     @test err isa ErrorException && occursin("neither Intel MKL Pardiso nor Panua Pardiso", err.msg)
 end
+
+# SP-D5 (single-precision.md, decision 11, proposed): the Krylov solvers in the system's element type, unconditioned;
+# :pardiso does not offer Float32
+@testset "extensions.jl: Float32" begin
+    using Krylov, Pardiso
+    DLS = DampedLinearSolve
+    n, m = 6, 9
+    A = let M = [sin(1.7 * (i + j) + 0.3 * i * j) for i in 1:n, j in 1:n]; M = (M + M') / 2; M + Diagonal(vec(sum(abs, M; dims = 2)) .+ 1) end
+    b = [cos(1.3 * i) for i in 1:n]
+    J = [sin(0.9 * i + 1.1 * j + 0.2 * i * j) + (i == j ? 2.0 : 0.0) for i in 1:m, j in 1:n]
+    r = [cos(0.7 * i) for i in 1:m]
+    # Krylov stops at a relative residual of about √eps(Float32)
+    ktol(M) = 4 * sqrt(eps(Float32)) * cond(M)
+    allocs(ls, s) = (solve!(ls, s); @allocated solve!(ls, s))
+    for s in (:cg, :minres), P in (Float32.(A), sparse(Float32.(A)))
+        ls = makehessiansystem(P, s)
+        @test systemeltype(ls) === Float32 && eltype(getb(ls)) === Float64 && eltype(getx(ls)) === Float64
+        @test eltype((P isa Matrix ? ls.solver_ws : ls.solver_ws.ws).x) === Float32
+        getb(ls) .= b
+        for (λ, sc) in ((0.0, nothing), (0.37, nothing), (2.9, [1.0 + i / n for i in 1:n]))
+            dampen!(ls, λ, sc)
+            @test solve!(ls, s) == Success
+            Ad = A + λ * (isnothing(sc) ? I : Diagonal(sc))
+            @test norm(getx(ls) - Ad \ b) / norm(Ad \ b) <= ktol(Ad)
+        end
+        @test getA(ls) == P   # the damping is restored
+        @test allocs(ls, static(s)) == 0
+    end
+    for P in (Float32.(J), sparse(Float32.(J)))
+        ls = makejacobiansystem(P, n, :lsmr)
+        @test systemeltype(ls) === Float32 && eltype(ls.solver_ws.ws.x) === Float32 && eltype(getr(getA(ls))) === Float64
+        getJ(getA(ls)) .= P; getr(getA(ls)) .= r; gradient!(getb(ls), getA(ls)); markstale!(getA(ls))
+        for (λ, sc) in ((0.0, nothing), (0.37, [1.0 + i / n for i in 1:n]))
+            dampen!(ls, λ, sc)
+            @test solve!(ls, :lsmr) == Success
+            Ad = J' * J + λ * (isnothing(sc) ? I : Diagonal(sc))
+            @test norm(getx(ls) - Ad \ (J' * r)) / norm(Ad \ (J' * r)) <= ktol(Ad)
+        end
+        @test allocs(ls, static(:lsmr)) == 0
+    end
+    @test DLS.lsmr_tolerances(Float64) == (sqrt(eps()), sqrt(eps()), sqrt(eps()), 1 / sqrt(eps()))
+    @test DLS.lsmr_tolerances(Float32) == (sqrt(eps(Float32)), sqrt(eps(Float32)), sqrt(eps(Float32)), 1 / sqrt(eps(Float32)))
+    # The Krylov solvers are among those that offer Float32 where SPQR does not
+    err = try makejacobiansystem(sparse(Float32.(J)), n, :auto); nothing catch e; e end
+    @test err isa ArgumentError && occursin("are :lsmr", err.msg)
+    # :pardiso: not offered for Float32 (it could not be checked on this machine: neither MKL nor Panua Pardiso is
+    # available on Apple silicon)
+    for P in (Float32.(A), sparse(Float32.(A)))
+        err = try makehessiansystem(P, :pardiso); nothing catch e; e end
+        @test err isa ArgumentError && occursin("linsolver = :pardiso does not offer Float32", err.msg) && occursin(":cg", err.msg)
+    end
+end

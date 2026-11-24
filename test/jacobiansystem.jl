@@ -292,7 +292,7 @@ end
     @test checkjacobian(DLS.SparseArrays.sparse(J)) === nothing
     for (bad, text) in ((0, "at least 1"), (zeros(0, 2), "has no rows"), (DLS.SparseArrays.spzeros(0, 2), "has no rows"),
                         (DLS.SparseArrays.sparse(Int32[1], Int32[1], [1.0]), "sparse Jacobian prototype of type"),
-                        (zeros(Float32, 3, 2), "must be Float64"), (true, "type Bool is not supported"),
+                        (zeros(Float16, 3, 2), "must be Float64 or Float32"), (true, "type Bool is not supported"),
                         ("J", "type String is not supported"))
         err = try checkjacobian(bad); nothing catch e; e end
         @test err isa ArgumentError && occursin(text, err.msg)

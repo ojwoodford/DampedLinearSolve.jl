@@ -40,8 +40,9 @@ The system applies the damping it is given; it never chooses it.
   allocated, `StaticArrays`) when `n` is a `Static.StaticInt`, dense when it is an `Int`. The caller
   decides between the two by the type of `n`.
 - `makejacobiansystem(J, n, linsolver)`: a Jacobian system built from a Jacobian prototype `J` (a
-  `Matrix{Float64}`, a `SparseMatrixCSC{Float64, Int}`, or an integer number of residuals `m`) and `n`
+  `Matrix`, a `SparseMatrixCSC{T, Int}`, or an integer number of residuals `m`) and `n`
   variables. With a static `n`, a dense `J` and a QR solver, the system is static when `m·n` is small.
+- The prototype's element type is the system's (see [Precision](#Precision)).
 - `linsolver` (a `Symbol` or a `Static.StaticSymbol`) is used to preallocate the solver's workspace
   (factorization, pivots, Krylov vectors). A system is solved with the solver it was built for; asking
   it for another is an `ArgumentError`.
@@ -104,11 +105,96 @@ These read the system as filled, whatever damping is recorded:
 - `quadratic_model_change(ls, dx)`: `dxᵀ A dx / 2 + bᵀ dx`, the change in the quadratic model for a
   step `dx`.
 - `dampingfloor(ls)`: the smallest damping the solver resolves, relative to the diagonal: about
-  `eps(Float64)` for a factorization of `A + λD` (including the normal equations of a dense Jacobian
-  system, `:cholesky` and `:ldl`, which factor `JᵀJ + λD`), and `eps(Float64)^2` for QR of `J` (and
+  `eps(T)` for a factorization of `A + λD` (including the normal equations of a dense Jacobian
+  system, `:cholesky` and `:ldl`, which factor `JᵀJ + λD`), and `eps(T)^2` for QR of `J` (and
   LSMR on `J`), which works with the condition number of `J`.
+- `systemeltype(ls)`: the element type `T` of the system (see [Precision](#Precision)).
 - `isfinitesystem(ls)`: whether every stored value of `A` (of `J` and `r`) is finite. Damping cannot
   repair a non-finite matrix, so an optimizer stops retrying when this is false.
+
+Every query returns a `Float64`, whatever the system's element type, and every quantity it reduces over `A`
+or `J` is accumulated in `Float64`.
+
+## Precision
+
+A system has an element type `T`, `Float64` or `Float32` ([`systemeltype`](@ref)): the type its matrix `A`
+(or `J`) is stored in, with every copy, reduction and factorization of it. It is the element type of the
+prototype; a system built without one (an integer `n` or `m`) is `Float64`, and any other element type is
+an `ArgumentError` when the system is built.
+
+| Quantity | Type |
+|---|---|
+| `A` of a Hessian system, `J` of a Jacobian system, and their copies, reductions and factorizations | `T` |
+| `b` (the gradient), `x` (the solution), `r` (a Jacobian system's residual) | `Float64` |
+| `λ`, a Marquardt scaling `s`, and every value a query returns | `Float64` |
+
+A solve narrows what it needs of `b` into the factorization's scratch in `T`, solves there, and widens the
+result into `x`. The QR of a dense or static Jacobian system keeps the residual in `Float64`: it applies the
+`T` reflectors to a `Float64` column, so its step is the least-squares solution for `r` as computed, not as
+rounded to `T`. Whoever fills `A` or `J` writes `T` values.
+
+Whether a solver offers `Float32` is a fact about its library on that Julia version. A solver that does not
+offer the prototype's element type is an `ArgumentError` when the system is built, naming the solvers that
+do: there is no silent substitution, `:auto` included. Checked by building and solving on Julia 1.10
+(SparseArrays 1.10) and 1.13 (SparseArrays 1.13):
+
+| System | Offers `Float32` | Does not |
+|---|---|---|
+| static | `:auto`, `:cholesky`, `:ldl`, `:qr` (StaticArrays) | |
+| dense | `:auto`, `:cholesky`, `:ldl`, `:qr` (LAPACK); `:cg`, `:minres` (Krylov.jl) | `:pardiso` |
+| sparse | `:auto`, `:ldl` (LDLFactorizations); `:cholesky` (CHOLMOD) from SparseArrays 1.13, which factorizes single precision; `:cg`, `:minres` | `:cholesky` on SparseArrays 1.10 (which converts to `Float64`); `:qr` (SPQR converts to `Float64` on both); `:pardiso` |
+| Jacobian, dense | `:auto`, `:qr` (LAPACK QR), `:cholesky`, `:ldl` (BLAS `syrk`, LAPACK); `:lsmr` | |
+| Jacobian, static | `:auto`, `:qr` | |
+| Jacobian, sparse | `:lsmr` | `:auto`, `:qr` (SPQR) |
+
+The Krylov solvers run in `T` (their vectors in `T`, `b` or `r` narrowed into them), with their tolerances
+`√eps(T)` (LSMR's `conlim` `1/√eps(T)`). `:pardiso` is not offered for `Float32`: it could not be checked,
+neither MKL nor Panua Pardiso being available on the machine this was built on.
+
+The `Float32` QR of a dense Jacobian system loses the direction of a heavily damped step: the
+Levenberg step's direction is within 1e-3 of the gradient's up to `λ = 1e7·max_diag` on the package's
+test problem, and 0.065 from it at `1e12·max_diag` (`Float64`: 1e-13), a documented limit of that solver.
+
+The `Float32` QR solve is not refined, so where the residual at the solution is large against the gradient its error
+is the factor's own, about `eps(T)·κ²·‖r‖/(‖J‖‖x‖)`, which keeping `r` in `Float64` does not remove: with
+`‖Jᵀr‖ = 1e-6·‖J‖·‖r‖`, a relative error in `x` of about 0.1 at `κ(J) = 10` and above 1 at `κ(J) = 1e3` (`Float64`:
+1e-10 and 1e-6). An optimizer then takes rejected steps near the optimum and stops short of the `Float64` solution.
+Iterative refinement in `Float64` (one step of Björck's method) removed the error, but on the bundle adjustments it was
+measured on it cost more than `Float64` did, so it is not done: use `Float64` for such problems.
+
+The tolerances that compare with rounding in the matrix follow `T`: [`dampingfloor`](@ref) is `eps(T)` or
+`eps(T)^2`, the rank tests of the Jacobian QR use `eps(T)`, and the indefiniteness test of `:ldl` counts a
+pivot as negative below `-rtol` times the largest, with `rtol = 1e-6` for `Float64` and
+`eps(Float32)^(3/8) ≈ 2.5e-3` for `Float32` (a starting value).
+
+## Conditioning
+
+The dense and sparse systems, Hessian and Jacobian, condition the damped problem inside `solve!`, in either
+element type: with `S = Diagonal(s)`, a Hessian system solves `S(A + λD)S y = S b` and returns `x = S y`; a
+Jacobian system factorizes `J S`, with the damping rows `√(λ D_jj)·s_j`, and returns `x = S y`. In exact
+arithmetic `x` is the unconditioned solution, so an optimizer follows the same path with or without it,
+apart from rounding, and its damping, trust region and tests are all in the original variables.
+
+`s_j` is the power of two nearest, on a log scale, to `1/(1e-12 + √|d_j + λ₀·D_jj|)`, with `d_j` the
+diagonal of `A` as filled (for a Jacobian system, the squared column norms of `J`) and `λ₀·D` the damping of
+the first solve after a fill; `s_j = 1` where that is not finite. It is computed once per fill, at that
+first solve, and reused for later dampings of the same fill (a Jacobian system factorizes `J S` once per
+fill, as without conditioning); [`zero!`](@ref) and [`markstale!`](@ref) invalidate it. Each scaled entry is
+formed in `Float64` and narrowed once. When a later damping has moved far from the one the scale was computed
+at (for some variable the scaled damped diagonal `|d_j + λ·D_jj|·s_j²` lies outside `[2^-16, 2^16]`), the scale
+is recomputed at that damping, for that solve and the ones after it: going from undamped to heavily damped on a
+weak variable is the case it is for, and an optimizer raising or lowering `λ` by a few factors of ten does not
+reach it. The dense Jacobian system then rescales the columns of its held `R` (exact: the scales are powers of
+two) rather than factorizing `J` again. The `1e-12` and the `2^16` are starting values.
+Scaling by powers of two is exact, so with no overflow or underflow a factorization that does not pivot
+(Cholesky, LDLᵀ, Householder QR) gives the scaled result of the unconditioned one exactly: what
+conditioning changes is the range of the entries, which matters in `Float32`, and the decisions made by
+comparing magnitudes (pivoting, and the rank and indefiniteness tests). `A`, `J`, `b` and `r` are never
+scaled: the solve scales as it copies into its scratch, and every query reads the system as filled.
+
+The static systems are not conditioned, and neither are the Krylov solves: for an iterative solver a
+diagonal scaling is a preconditioner, which changes the iterates by more than rounding. There is no
+public switch.
 
 ## The spare system
 
@@ -149,4 +235,5 @@ conformance hooks (`conformance_fill!`, `conformance_fillb!`, `conformance_matri
 `conformance_traits`) and checks every rule on this page that can be checked from outside: solutions
 against a dense reference, damping replaced and not accumulated, `A` and `b` untouched by a solve, the
 spare system independent, the queries, `zero!`, and indefinite matrices. It throws naming the first
-rule broken.
+rule broken. A system of element type `T` is held to the same rules, with the tolerances on its solutions in
+proportion to `eps(T)`: those stated, for `Float64`.

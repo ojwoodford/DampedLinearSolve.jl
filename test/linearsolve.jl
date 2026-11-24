@@ -377,15 +377,17 @@ end
     # makehessiansystem from an immutable static matrix, a non-Matrix dense matrix, and a size
     ls_s = makehessiansystem(SMatrix{2, 2}(4.0, 1.0, 1.0, 3.0), :auto)
     @test ls_s isa DLS.StaticLinearSystem{2, 4, Float64}
-    for H in (Symmetric([4.0 1.0; 1.0 3.0]), [4 1; 1 3])
+    for H in (Symmetric([4.0 1.0; 1.0 3.0]),)
         ls_h = makehessiansystem(H, :ldl)
-        @test ls_h isa DLS.DenseLinearSystem{Float64, DLS.DenseLDLWorkspace}
+        @test ls_h isa DLS.DenseLinearSystem{Float64, DLS.DenseLDLWorkspace{Float64}}
         @test getA(ls_h) == [4.0 1.0; 1.0 3.0] && getA(ls_h) !== H
         getb(ls_h) .= [1.0, 2.0]
         @test solve!(ls_h, :ldl) == Success
         @test getx(ls_h) ≈ [4.0 1.0; 1.0 3.0] \ [1.0, 2.0]
     end
-    for (n, s, W) in ((4, :auto, Nothing), (Int32(4), :ldl, DLS.DenseLDLWorkspace))
+    # An integer prototype is not converted: a system is Float64 or Float32 (single-precision.md, decision 10)
+    @test_throws ArgumentError makehessiansystem([4 1; 1 3], :ldl)
+    for (n, s, W) in ((4, :auto, Nothing), (Int32(4), :ldl, DLS.DenseLDLWorkspace{Float64}))
         ls_n = makehessiansystem(n, s)
         @test ls_n isa DLS.DenseLinearSystem{Float64, W}
         @test size(getA(ls_n)) == (4, 4)

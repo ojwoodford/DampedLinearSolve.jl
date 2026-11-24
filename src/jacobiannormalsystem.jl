@@ -12,17 +12,20 @@
 struct JacobianNormalWorkspace{S, H}
     hs::H
 end
-function JacobianNormalWorkspace{S}(n::Integer) where S
-    hs = makehessiansystem(zeros(Float64, n, n), static(S))
+# In `T`, the element type of J: the product JᵀJ and its factorization
+# Conditioned, the dense Hessian system conditions the product from its damped diagonal at the first solve after the
+# product is formed (the squared column norms of J, computed in T, plus λ₀·D), which is (J S)ᵀ(J S)
+function JacobianNormalWorkspace{S}(n::Integer, ::Type{T}=Float64, condition::Bool=true) where {S, T}
+    hs = hessiansystem(zeros(T, n, n), static(S), condition)
     return JacobianNormalWorkspace{S, typeof(hs)}(hs)
 end
-makejacobianws(m, n, ::StaticSymbol{:cholesky}) = JacobianNormalWorkspace{:cholesky}(n)
-makejacobianws(m, n, ::StaticSymbol{:ldl}) = JacobianNormalWorkspace{:ldl}(n)
+makejacobianws(m, n, ::StaticSymbol{:cholesky}, ::Type{T}, condition::Bool) where T = JacobianNormalWorkspace{:cholesky}(n, T, condition)
+makejacobianws(m, n, ::StaticSymbol{:ldl}, ::Type{T}, condition::Bool) where T = JacobianNormalWorkspace{:ldl}(n, T, condition)
 builtfor(::JacobianNormalWorkspace{S}) where S = ":$S"
 
 # No QR is done, so the QR scratch holds no copy of [J r] and no stacked matrix: it is kept only for
 # its `owner` token, which says whose product the shared workspace holds
-qrscratch(m, n, ::Union{StaticSymbol{:cholesky}, StaticSymbol{:ldl}}) = JacobianQRScratch(0, 0)
+qrscratch(m, n, ::Union{StaticSymbol{:cholesky}, StaticSymbol{:ldl}}, ::Type{T}) where T = JacobianQRScratch{T}(0, 0)
 
 const NormalJacobianSystem = DenseJacobianLinearSystem{<:JacobianNormalWorkspace}
 
@@ -35,7 +38,9 @@ function form_normal!(ls::NormalJacobianSystem)
     ws.scratch.owner = ws.token
     ws.nonfinite = !(all(isfinite, A.J) && all(isfinite, A.r))
     ws.nonfinite && return nothing
-    LinearAlgebra.BLAS.syrk!('U', 'T', 1.0, A.J, 0.0, ls.solver_ws.hs.A)
+    J = A.J
+    LinearAlgebra.BLAS.syrk!('U', 'T', one(eltype(J)), J, zero(eltype(J)), ls.solver_ws.hs.A)
+    ls.solver_ws.hs.scalevalid = false   # a new fill of the product: its scale is computed at the next solve
     ws.nfactor += 1
     return nothing
 end
@@ -73,4 +78,4 @@ solve!(ls::DenseJacobianLinearSystem{<:JacobianNormalWorkspace{:ldl}}, s::Static
 
 # The normal equations work with cond(JᵀJ) = cond(J)², so, as for a factorization of the Hessian, a
 # damping below about eps times the diagonal is not resolved
-dampingfloor(ls::NormalJacobianSystem) = eps(Float64)
+dampingfloor(ls::NormalJacobianSystem) = Float64(eps(systemeltype(ls)))

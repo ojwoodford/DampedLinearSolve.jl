@@ -8,6 +8,8 @@ using Test
     include("aqua.jl")
     include("utils.jl")
     include("linearsolve.jl")
+    include("precision.jl")
+    include("conditioning.jl")
     include("conformance.jl")
     include("jacobiansystem.jl")
     include("jacobiannormalsystem.jl")

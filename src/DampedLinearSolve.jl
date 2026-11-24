@@ -23,12 +23,18 @@ export checkhessian, checkjacobian, check_jacobian_linsolver, jacobian_ncols, ja
 export checklinsolver, validatelinsolver
 export getA, getb, getx, zero!, getJ, getr, gradient!, markstale!
 export dampen!, solve!
-export max_diag, getdiag!, quadform, quadratic_model_change, dampingfloor, isfinitesystem
+export max_diag, getdiag!, quadform, quadratic_model_change, dampingfloor, isfinitesystem, systemeltype
 export copy_structure, sharex
 export check_linear_system, conformance_matrix, conformance_fill!, conformance_fillb!, conformance_traits
 
 # Utilities
 include("utils.jl")
+
+# The element types a system is built in, and which solver offers which
+include("precision.jl")
+
+# Conditioning inside the solve: the scale, and the systems' internal switch
+include("conditioning.jl")
 
 # The contract, and the systems with a square Hessian: static, dense and sparse
 include("linearsystem.jl")

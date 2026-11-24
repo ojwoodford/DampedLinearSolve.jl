@@ -11,24 +11,33 @@ import DampedLinearSolve: AbstractLinearSystem, SparseLinearSystem, DenseLinearS
 import DampedLinearSolve: SolveStatus, Success, NotPositiveDefinite, Indefinite
 import DampedLinearSolve: uniformscaling!, damp_marquardt!, builtfor, solvermismatch
 import DampedLinearSolve: DenseJacobianLinearSystem, SparseJacobianLinearSystem, makejacobianws, jmul!, jtr!
-import DampedLinearSolve: LSMR_ETOL, LSMR_AXTOL, LSMR_BTOL, LSMR_CONLIM
+import DampedLinearSolve: lsmr_tolerances, offers_eltype
 
 # Validation of Krylov solver symbols
 validatelinsolver(::StaticSymbol{:cg}) = true
 validatelinsolver(::StaticSymbol{:minres}) = true
 validatelinsolver(::StaticSymbol{:lsmr}) = true   # for a Jacobian system: on the normal equations it would square their condition number again
 
+# The Krylov solvers run in the system's element type: the workspace's vectors are in T, b (and r) is narrowed into
+# them and the solution widened into x. They are not conditioned: for an iterative solve a diagonal scaling is a
+# preconditioner, which changes the iterates by more than rounding (single-precision.md, decision 11, proposed).
+const KrylovHessian = Union{StaticSymbol{:cg}, StaticSymbol{:minres}}
+offers_eltype(::Type{Float32}, ::Val{:dense}, ::KrylovHessian) = true
+offers_eltype(::Type{Float32}, ::Val{:sparse}, ::KrylovHessian) = true
+offers_eltype(::Type{Float32}, ::Val{:jacobian_dense}, ::StaticSymbol{:lsmr}) = true
+offers_eltype(::Type{Float32}, ::Val{:jacobian_sparse}, ::StaticSymbol{:lsmr}) = true
+
 # A Krylov workspace plus storage for a Jacobi (diagonal) preconditioner
-struct JacobiWorkspace{W}
+struct JacobiWorkspace{W, T}
     ws::W
-    invdiag::Vector{Float64}
+    invdiag::Vector{T}
 end
-JacobiWorkspace(ws, n::Integer) = JacobiWorkspace(ws, Vector{Float64}(undef, n))
+JacobiWorkspace(ws, n::Integer, ::Type{T}) where T = JacobiWorkspace(ws, Vector{T}(undef, n))
 
 # Fill the inverse of the (damped) diagonal of `ls.A`. Returns false, meaning "don't
 # precondition", when a diagonal entry is not positive and finite: the Jacobi preconditioner
 # must be positive definite, and an indefinite matrix should still be reported as such.
-function jacobi!(invdiag::Vector{Float64}, ls::SparseLinearSystem)
+function jacobi!(invdiag::Vector, ls::SparseLinearSystem)
     @inbounds for (i, idx) in enumerate(ls.diag_inds)
         d = ls.A.nzval[idx]
         (d > 0 && isfinite(d)) || return false
@@ -38,12 +47,12 @@ function jacobi!(invdiag::Vector{Float64}, ls::SparseLinearSystem)
 end
 
 # Preallocated workspace creation for SparseLinearSystem
-makesparsews(A, ::StaticSymbol{:cg}) = JacobiWorkspace(Krylov.CgWorkspace(A, zeros(eltype(A), size(A, 1))), size(A, 1))
-makesparsews(A, ::StaticSymbol{:minres}) = JacobiWorkspace(Krylov.MinresWorkspace(A, zeros(eltype(A), size(A, 1))), size(A, 1))
+makesparsews(A, ::StaticSymbol{:cg}) = JacobiWorkspace(Krylov.CgWorkspace(A, zeros(eltype(A), size(A, 1))), size(A, 1), eltype(A))
+makesparsews(A, ::StaticSymbol{:minres}) = JacobiWorkspace(Krylov.MinresWorkspace(A, zeros(eltype(A), size(A, 1))), size(A, 1), eltype(A))
 
 # Preallocated workspace creation for DenseLinearSystem
-makedensews(n, ::StaticSymbol{:cg}) = Krylov.CgWorkspace(n, n, Vector{Float64})
-makedensews(n, ::StaticSymbol{:minres}) = Krylov.MinresWorkspace(n, n, Vector{Float64})
+makedensews(n, ::StaticSymbol{:cg}, ::Type{T}) where T = Krylov.CgWorkspace(n, n, Vector{T})
+makedensews(n, ::StaticSymbol{:minres}, ::Type{T}) where T = Krylov.MinresWorkspace(n, n, Vector{T})
 
 builtfor(::JacobiWorkspace{<:Krylov.CgWorkspace}) = ":cg"
 builtfor(::JacobiWorkspace{<:Krylov.MinresWorkspace}) = ":minres"
@@ -78,9 +87,9 @@ function solve!(ls::SparseLinearSystem, ::StaticSymbol{:cg})
     # without it, CG keeps iterating on an indefinite matrix. Jacobi-preconditioned when the
     # diagonal is positive (`M` is applied as a product, so it holds the inverse diagonal).
     if jacobi!(jws.invdiag, ls)
-        Krylov.cg!(ws, ls.A, ls.b; M=Diagonal(jws.invdiag), linesearch=true)
+        Krylov.cg!(ws, ls.A, copyto!(ls.rhs, ls.b); M=Diagonal(jws.invdiag), linesearch=true)
     else
-        Krylov.cg!(ws, ls.A, ls.b; linesearch=true)
+        Krylov.cg!(ws, ls.A, copyto!(ls.rhs, ls.b); linesearch=true)
     end
     copyto!(ls.x, ws.x)
     if ls.lambda > 0
@@ -102,9 +111,9 @@ function solve!(ls::SparseLinearSystem, ::StaticSymbol{:minres})
         end
     end
     if jacobi!(jws.invdiag, ls)
-        Krylov.minres!(ws, ls.A, ls.b; M=Diagonal(jws.invdiag))
+        Krylov.minres!(ws, ls.A, copyto!(ls.rhs, ls.b); M=Diagonal(jws.invdiag))
     else
-        Krylov.minres!(ws, ls.A, ls.b)
+        Krylov.minres!(ws, ls.A, copyto!(ls.rhs, ls.b))
     end
     copyto!(ls.x, ws.x)
     if ls.lambda > 0
@@ -127,13 +136,14 @@ function solve!(ls::DenseLinearSystem, ::StaticSymbol{:cg})
         end
     end
     ws = ls.solver_ws
+    copyto!(ls.rhs, ls.b)
     if ws isa Krylov.CgWorkspace
-        Krylov.cg!(ws, ls.A_scratch, ls.b; linesearch=true)
+        Krylov.cg!(ws, ls.A_scratch, ls.rhs; linesearch=true)
         copyto!(ls.x, ws.x)
         return cg_status(ws.stats)
     end
     # Not built by `makehessiansystem` for :cg, so no preallocated workspace
-    (x, stats) = Krylov.cg(ls.A_scratch, ls.b; linesearch=true)
+    (x, stats) = Krylov.cg(ls.A_scratch, ls.rhs; linesearch=true)
     copyto!(ls.x, x)
     return cg_status(stats)
 end
@@ -148,12 +158,13 @@ function solve!(ls::DenseLinearSystem, ::StaticSymbol{:minres})
         end
     end
     ws = ls.solver_ws
+    copyto!(ls.rhs, ls.b)
     if ws isa Krylov.MinresWorkspace
-        Krylov.minres!(ws, ls.A_scratch, ls.b)
+        Krylov.minres!(ws, ls.A_scratch, ls.rhs)
         copyto!(ls.x, ws.x)
         return ws.stats.solved ? Success : NotPositiveDefinite
     end
-    (x, stats) = Krylov.minres(ls.A_scratch, ls.b)
+    (x, stats) = Krylov.minres(ls.A_scratch, ls.rhs)
     copyto!(ls.x, x)
     return stats.solved ? Success : NotPositiveDefinite
 end
@@ -167,13 +178,15 @@ end
 # preconditioner N = F⁻¹. Nothing is augmented and JᵀJ is never formed. J's products are this
 # package's plain loops (`jmul!`, `jtr!`), not BLAS (rules.md 23).
 
-# The tolerances (LSMR_ETOL and the rest, in jacobiansystem.jl) are starting values, not measured.
+# The tolerances (`lsmr_tolerances`, in jacobiansystem.jl) are starting values, not measured. In T, the system's element
+# type: the workspace's vectors, the inverse scaling, and r, narrowed into `rhs`.
 
-struct JacobianLsmrWorkspace{W}
+struct JacobianLsmrWorkspace{W, T}
     ws::W
-    invscale::Vector{Float64}     # N = F⁻¹, the inverse of the Marquardt scaling
+    invscale::Vector{T}     # N = F⁻¹, the inverse of the Marquardt scaling
+    rhs::Vector{T}          # r, narrowed
 end
-makejacobianws(m, n, ::StaticSymbol{:lsmr}) = JacobianLsmrWorkspace(Krylov.LsmrWorkspace(m, n, Vector{Float64}), Vector{Float64}(undef, n))
+makejacobianws(m, n, ::StaticSymbol{:lsmr}, ::Type{T}, ::Bool) where T = JacobianLsmrWorkspace(Krylov.LsmrWorkspace(m, n, Vector{T}), Vector{T}(undef, n), Vector{T}(undef, m))
 builtfor(::JacobianLsmrWorkspace) = ":lsmr"
 
 # J as an operator, and its adjoint, for Krylov
@@ -187,7 +200,7 @@ Base.size(A::JacobianOperator) = size(A.J)
 Base.size(A::JacobianOperator, d::Integer) = size(A.J, d)
 Base.size(A::JacobianOperatorT) = reverse(size(A.J))
 Base.size(A::JacobianOperatorT, d::Integer) = size(A)[d]
-Base.eltype(::Union{JacobianOperator, JacobianOperatorT}) = Float64
+Base.eltype(A::Union{JacobianOperator, JacobianOperatorT}) = eltype(A.J)
 Base.adjoint(A::JacobianOperator) = JacobianOperatorT(A.J)
 LinearAlgebra.mul!(y::AbstractVector, A::JacobianOperator, v::AbstractVector) = jmul!(y, A.J, v)
 LinearAlgebra.mul!(y::AbstractVector, A::JacobianOperatorT, w::AbstractVector) = jtr!(y, A.J, w)
@@ -210,15 +223,16 @@ function solve!(ls::LsmrJacobianSystem, ::StaticSymbol{:lsmr})
     # solution there.)
     lambda == 0 && m < n && return NotPositiveDefinite
     op = JacobianOperator(J)
+    T = eltype(J)
+    etol, axtol, btol, conlim = lsmr_tolerances(T)
+    rhs = copyto!(lw.rhs, r)
     if lambda > 0 && !isnothing(ls.scaling)
         @inbounds for i in 1:n
             lw.invscale[i] = inv(ls.scaling[i])
         end
-        Krylov.lsmr!(lw.ws, op, r; λ = sqrt(lambda), N = Diagonal(lw.invscale),
-                     etol = LSMR_ETOL, axtol = LSMR_AXTOL, btol = LSMR_BTOL, conlim = LSMR_CONLIM)
+        Krylov.lsmr!(lw.ws, op, rhs; λ = T(sqrt(lambda)), N = Diagonal(lw.invscale), etol, axtol, btol, conlim)
     else
-        Krylov.lsmr!(lw.ws, op, r; λ = sqrt(lambda),
-                     etol = LSMR_ETOL, axtol = LSMR_AXTOL, btol = LSMR_BTOL, conlim = LSMR_CONLIM)
+        Krylov.lsmr!(lw.ws, op, rhs; λ = T(sqrt(lambda)), etol, axtol, btol, conlim)
     end
     x = lw.ws.x
     (lw.ws.stats.solved && all(isfinite, x)) || return NotPositiveDefinite
