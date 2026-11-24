@@ -125,6 +125,12 @@ end
             @test err isa ArgumentError && occursin("does not offer Float32", err.msg) &&
                   occursin(SP_SPARSE32 ? ":auto, :cholesky and :ldl" : ":auto and :ldl", err.msg)
         end
+        # The static system offers the generic direct solvers in Float32, and no other
+        for H in (MMatrix{SP_N, SP_N}(A32), SMatrix{SP_N, SP_N}(A32))
+            err = try makehessiansystem(H, :cg); nothing catch e; e end
+            @test err isa ArgumentError && occursin("does not offer Float32 for a static Hessian system", err.msg) &&
+                  occursin(":auto, :cholesky, :ldl and :qr", err.msg)
+        end
         # A solver name no built-in system takes in Float32 (an extension's, before the extension offers it)
         err = try makehessiansystem(copy(A32), :not_a_solver); nothing catch e; e end
         @test err isa ArgumentError && occursin("does not offer Float32 for a dense Hessian system", err.msg)
@@ -248,6 +254,11 @@ sp_fill!(ls, J32, r) = (getJ(getA(ls)) .= J32; getr(getA(ls)) .= r; gradient!(ge
         @test checkjacobian(J32) === nothing && checkjacobian(sparse(J32)) === nothing
         err = try makejacobiansystem(zeros(Float32, m, n), n, :not_a_solver); nothing catch e; e end
         @test err isa ArgumentError && occursin("does not offer Float32 for a dense Jacobian system", err.msg)
+        # A static Jacobian system is built only for :auto and :qr, which both offer Float32, so its refusal is
+        # reached only directly
+        err = try DLS.check_offers(Float32, :jacobian_static, :lsmr); nothing catch e; e end
+        @test err isa ArgumentError && occursin("does not offer Float32 for a static Jacobian system", err.msg) &&
+              occursin(":auto and :qr", err.msg)
         @test makejacobiansystem(m, n, :auto) isa DLS.DenseJacobianLinearSystem{<:Any, Float64}
     end
 end
