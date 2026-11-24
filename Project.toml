@@ -1,6 +1,6 @@
 name = "DampedLinearSolve"
 uuid = "d0bc3897-303a-4c2a-8def-9d5e444f89b8"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Oliver Woodford"]
 
 [deps]
